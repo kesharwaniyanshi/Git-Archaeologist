@@ -89,6 +89,7 @@ def main():
     """
     # For now, hardcode the repo path. You'll make this a CLI arg later.
     repo_path = "/Users/yanshikesharwani/vscode/Git Archaeologist"
+    # TODO: Add CLI argument support for flexibility
     
     print(f"📦 Extracting commits from: {repo_path}")
     print("=" * 60)
