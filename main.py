@@ -65,6 +65,13 @@ def _is_binary(filename: str) -> bool:
     """
     Check if a file is likely binary based on extension.
     
+    Supports:
+    - Images: PNG, JPG, GIF, ICO, WEBP
+    - Media: MP3, MP4, MOV, WAV
+    - Archives: ZIP, TAR, GZ, RAR
+    - Compiled: PYC, SO, O, A
+    - Documents: PDF, DOCX, XLS
+    
     Args:
         filename: Path to the file
     
