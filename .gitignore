@@ -31,10 +31,11 @@ wheels/
 *~
 
 # Environment variables
-.env
+/.env
 .env.local
 
 # Project outputs
 *.json
 *.csv
 *.log
+.git_arch_sessions*
