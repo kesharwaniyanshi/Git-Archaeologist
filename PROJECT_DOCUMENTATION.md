@@ -37,23 +37,37 @@ Git Archaeologist mines Git commit history and creates searchable, AI-understood
 
 ```
 Git Archaeologist/
-├── main.py                    # Pipeline orchestrator (Step 1 + Step 2)
-├── diff_processor.py          # Parse diffs, extract context (Step 2)
-├── summarizer.py              # LLM integration (Step 2)
-├── embeddings.py              # Convert summaries → vectors (Step 3)
-├── vector_store.py            # Store/retrieve vectors (Step 4)
-├── rag_retrieval.py           # Search + ranking (Step 5)
-├── api.py                     # FastAPI server (Step 6)
+├── analyzers/                 # Query-driven commit analysis
+│   ├── query_analyzer.py      # QueryDrivenAnalyzer orchestrator
+│   └── query_utils.py         # Utility functions
+├── api/                       # FastAPI REST service
+│   └── app.py                 # /health, /status, /index, /analyze endpoints
+├── cli/                       # Command-line interfaces
+│   └── main.py                # Demo CLI entrypoint
+├── core/                      # Shared utilities
+│   ├── commit_indexer.py      # Lightweight commit metadata extraction
+│   ├── diff_processor.py      # Diff parsing and formatting
+│   ├── embeddings.py          # EmbeddingEngine (sentence-transformers)
+│   ├── retrieval.py           # Keyword-based candidate selection
+│   ├── summarizer.py          # CommitSummarizer (Groq LLM)
+│   └── vector_store.py        # LocalVectorStore (FAISS)
+├── pipelines/                 # RAG retrieval pipeline
+│   ├── rag_cli.py             # CLI entrypoint for RAG queries
+│   ├── rag_models.py          # RetrievalResult, QueryMetadata dataclasses
+│   ├── rag_pipeline.py        # RAGPipeline orchestration
+│   └── rag_processing.py      # QueryFilter, ResultRanker helpers
+├── frontend/                  # Next.js UI (Step 7)
 ├── requirements.txt           # Python dependencies
 ├── .env                       # Secret keys (git-ignored)
 ├── .env.example               # Template for .env
 ├── .gitignore                 # Standard Python ignores
+├── smoke_test_api.py          # API validation test
 │
-└── outputs/                   # Generated files
-    ├── commits_extracted.json          # Step 1 output
-    ├── summaries_generated.json        # Step 2 output
-    ├── embeddings_generated.json       # Step 3 output (future)
-    └── vector_db_snapshot.json         # Step 4 output (future)
+└── .git_arch_sessions/        # Session persistence
+    └── [session_id]/
+        ├── faiss.index        # Vector store
+        ├── metadata.json      # Commit metadata
+        └── mappings.json      # Hash-position mappings
 ```
 
 ---
@@ -64,13 +78,13 @@ This project is built in **7 steps**, each building on the previous one:
 
 | Step | Name | Status | Output |
 |------|------|--------|--------|
-| 1 | Git Commit Extraction | ✅ **DONE** | `commits_extracted.json` |
-| 2 | AI Summarization | ✅ **DONE** | `summaries_generated.json` |
-| 3 | Embeddings Generation | ✅ **DONE (Local)** | In-memory semantic embeddings |
-| 4 | Vector Storage | ✅ **DONE (Local FAISS)** | Session persistence (.git_arch_sessions/) |
-| 5 | RAG Retrieval | ⏳ TODO | Search engine |
-| 6 | FastAPI Endpoint | ⏳ TODO | REST API |
-| 7 | Frontend | ⏳ TODO | Next.js UI |
+| 1 | Git Commit Extraction | ✅ **DONE** | Lightweight indexing |
+| 2 | AI Summarization | ✅ **DONE** | Groq LLM summaries |
+| 3 | Embeddings Generation | ✅ **DONE** | sentence-transformers (local) |
+| 4 | Vector Storage | ✅ **DONE** | FAISS (local) with session persistence |
+| 5 | RAG Retrieval | ✅ **DONE** | RAGPipeline with synthesis |
+| 6 | FastAPI Endpoint | ✅ **DONE** | REST API with /index, /analyze |
+| 7 | Frontend | 🚧 **IN PROGRESS** | Next.js UI |
 
 ---
 
@@ -86,7 +100,8 @@ Extract the last N commits from a local Git repository with complete information
 This is the **data foundation**. Without clean extracted data, everything downstream breaks.
 
 ### **Files Involved**
-- **`main.py`** - `extract_commits()` function
+- **`core/commit_indexer.py`** - `index_commits_lightweight()` function
+- **`analyzers/query_utils.py`** - `ingest_light()` helper
 
 ### **How It Works**
 
@@ -138,13 +153,16 @@ def extract_commits(repo_path: str, max_commits: int = 20) -> list[dict]:
 
 ### **Testing**
 
-Run extraction:
+Run query-driven analysis:
 ```bash
 cd "/Users/yanshikesharwani/vscode/Git Archaeologist"
-./.venv/bin/python3 main.py
+./.venv/bin/python -m analyzers.query_analyzer . --query "your question" --max 10
 ```
 
-Output: `commits_extracted.json` with 3 test commits
+Run RAG pipeline:
+```bash
+./.venv/bin/python -m pipelines.rag_cli . --query "your question" --top-k 5
+```
 
 ---
 
@@ -159,13 +177,13 @@ Transform raw diffs into concise, natural language summaries that explain *why* 
 ### **Why This Matters**
 Instead of searching raw diffs (hard, imprecise), we search summaries (human-readable, searchable). This is what goes into embeddings.
 
-### **Files Involved**
-- **`diff_processor.py`** - Parse and format diffs
-- **`summarizer.py`** - LLM orchestration
-- **`main.py`** - `summarize_commits()` orchestrator function
+### *core/diff_processor.py`** - Parse and format diffs
+- **`core/summarizer.py`** - LLM orchestration (CommitSummarizer class)
+- **`analyzers/query_analyzer.py`** - QueryDrivenAnalyzer orchestrator
 
 ### **How It Works**
 
+#### **Phase 1: Diff Processing** (`core/
 #### **Phase 1: Diff Processing** (`diff_processor.py`)
 
 ```python
@@ -191,7 +209,7 @@ def extract_diff_summary(files_changed: list[dict]) -> dict:
 - Huge diffs waste tokens without adding value
 - LLM can understand intent from first 50 lines + context
 
-#### **Phase 2: LLM Summarization** (`summarizer.py`)
+#### **Phase 2: LLM Summarization** (`core/summarizer.py`)
 
 ```python
 class CommitSummarizer:
@@ -256,10 +274,15 @@ class CommitSummarizer:
 
 ### **Testing**
 
-Run full pipeline:
+Run API server:
 ```bash
+./.venv/bin/python -m uvicorn api.app:app --reload --port 8000
+```
 
----
+Health check:
+```bash
+python smoke_test_api.py
+```
 
 ## **STEP 3: Embeddings Generation** ✅ (Local)
 
@@ -286,25 +309,31 @@ Output: `summaries_generated.json` with AI-generated explanations
 
 ---
 
-## **Data Flow So Far**
-
-```
-Git Repository
+## **Datacore/commit_indexer.py]
     ↓
-[STEP 1: extract_commits()]
+Lightweight commit metadata
     ↓
-commits_extracted.json (3 commits, raw diffs)
+[STEP 2: core/summarizer.py + core/diff_processor.py]
     ↓
-[STEP 2: summarize_commits()]
-    ├─→ diff_processor.py (parse context)
-    └─→ summarizer.py (call Groq LLM)
+AI-generated summaries
     ↓
-summaries_generated.json (3 commits, AI summaries)
+[STEP 3: core/embeddings.py]
     ↓
-[STEP 3: NEXT → Embeddings]
+Semantic vectors (384-dim)
     ↓
-[STEP 4: NEXT → Vector Storage]
+[STEP 4: core/vector_store.py]
     ↓
+FAISS index + session persistence
+    ↓
+[STEP 5: pipelines/rag_pipeline.py + analyzers/query_analyzer.py]
+    ↓
+RAG retrieval + answer synthesis
+    ↓
+[STEP 6: api/app.py]
+    ↓
+FastAPI REST endpoints
+    ↓
+[STEP 7: frontend/ → Next.js UI
 [STEP 5: NEXT → RAG Retrieval]
     ↓
 [STEP 6: NEXT → FastAPI]
@@ -488,13 +517,13 @@ Use local sentence-transformers to convert commit metadata into semantic embeddi
 ### **Usage**
 ```bash
 # Index with embeddings (default)
-python query_analyzer.py . --max 200 --query "Why was auth changed?"
+python -m analyzers.query_analyzer . --max 200 --query "Why was auth changed?"
 
 # Without embeddings (faster for small repos)
-python query_analyzer.py . --max 200 --query "..." --no-embeddings
+python -m analyzers.query_analyzer . --max 200 --query "..." --no-embeddings
 
 # Custom embedding model
-python query_analyzer.py . --embedding-model "all-mpnet-base-v2"
+python -m analyzers.query_analyzer . --embedding-model "all-mpnet-base-v2"
 ```
 
 ---
@@ -526,15 +555,15 @@ Persist embeddings and summaries to disk so repeated queries on the same repo do
 ### **Usage**
 ```bash
 # First run: index and save session
-python query_analyzer.py . --max 200 --session-dir .sessions/my_repo --query "Why was binary detection improved?"
+python -m analyzers.query_analyzer . --max 200 --session-dir .sessions/my_repo --query "Why was binary detection improved?"
 # Outputs: ✅ Indexed, 🧠 Built embeddings, 💾 Saved vector store
 
 # Second run: load session (instant, no re-indexing)
-python query_analyzer.py . --session-dir .sessions/my_repo --load-session --query "Why was auth changed?"
+python -m analyzers.query_analyzer . --session-dir .sessions/my_repo --load-session --query "Why was auth changed?"
 # Outputs: 📂 Loaded session with 3 embeddings, ✅ Loaded vector store
 
 # Create different sessions for different repos
-python query_analyzer.py ../other_repo --session-dir .sessions/other_repo --load-session
+python -m analyzers.query_analyzer ../other_repo --session-dir .sessions/other_repo --load-session
 ```
 
 ### **Performance Benefits**
@@ -556,4 +585,174 @@ To migrate from local FAISS to Supabase pgvector:
 
 **Completed**: Steps 1-4 (Extraction, Summarization, Local Embeddings, Persistent Vector Store)  
 **In Progress**: None  
-**Next**: Step 5 (RAG Retrieval) → Step 6 (FastAPI) → Step 7 (Frontend)
+**Next**: Complete (All Steps 1-7 Done! 🎉)
+
+---
+
+## **STEP 7: Frontend** ✅
+
+### **Goal**
+Build a modern, user-friendly web interface for Git Archaeologist using Next.js, TypeScript, and Tailwind CSS.
+
+### **What Was Implemented**
+
+#### **Technology Stack**
+- **Next.js 14** - React framework with App Router
+- **TypeScript** - Type safety
+- **Tailwind CSS** - Utility-first styling with dark mode
+- **Axios** - API communication
+
+#### **Project Structure**
+```
+frontend/
+├── app/
+│   ├── globals.css         # Tailwind styles
+│   ├── layout.tsx          # Root layout with metadata
+│   └── page.tsx            # Main page (search + results)
+├── components/
+│   ├── Header.tsx          # App header with branding
+│   ├── SearchInterface.tsx # Query input form
+│   └── ResultsView.tsx     # Display analysis results
+├── lib/
+│   └── api.ts              # API client (healthCheck, analyzeQuery, etc.)
+├── package.json
+├── tsconfig.json
+├── tailwind.config.ts
+├── next.config.js          # Proxy /api/* → http://localhost:8000
+└── .env.local              # Environment variables
+```
+
+### **Key Features**
+
+#### **1. Search Interface**
+- Repository path input
+- Natural language query textarea
+- Configurable parameters:
+  - Top K results (1-20)
+  - Max commits to analyze (10-10000)
+- Responsive design with dark mode
+
+#### **2. Results Display**
+- **Synthesized Answer Section**:
+  - AI-generated answer with confidence badge (High/Medium/Low)
+  - Confidence score percentage
+  - Clean, readable formatting
+
+- **Metadata Panel**:
+  - Total commits indexed
+  - Candidates analyzed
+  - Query execution time
+
+- **Relevant Commits List**:
+  - Commit hash (short)
+  - Commit message
+  - AI-generated summary
+  - Visual relevance score bar
+  - Status badges
+
+#### **3. UI/UX Design**
+- Modern dark theme with gradient backgrounds
+- Smooth transitions and hover effects
+- Loading spinner during analysis
+- Error handling with user-friendly messages
+- Fully responsive layout
+
+### **API Integration**
+
+The frontend communicates with the FastAPI backend at `http://localhost:8000`:
+
+```typescript
+// lib/api.ts
+export async function analyzeQuery(data: AnalyzeRequest) {
+  const response = await apiClient.post('/analyze', data)
+  return response.data
+}
+```
+
+Next.js config proxies `/api/*` to the backend for seamless integration.
+
+### **Setup & Run**
+
+#### **Install Dependencies**
+```bash
+cd frontend
+npm install
+```
+
+#### **Environment Variables**
+Create `frontend/.env.local`:
+```
+NEXT_PUBLIC_API_URL=http://localhost:8000
+```
+
+#### **Development Mode**
+```bash
+cd frontend
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000)
+
+#### **Production Build**
+```bash
+cd frontend
+npm run build
+npm start
+```
+
+### **Full Stack Workflow**
+
+1. **Start Backend API** (Terminal 1):
+   ```bash
+   cd "/Users/yanshikesharwani/vscode/Git Archaeologist"
+   ./.venv/bin/python -m uvicorn api.app:app --reload --port 8000
+   ```
+
+2. **Start Frontend Dev Server** (Terminal 2):
+   ```bash
+   cd frontend
+   npm run dev
+   ```
+
+3. **Open Browser**:
+   - Navigate to [http://localhost:3000](http://localhost:3000)
+   - Enter your repository path
+   - Ask a question
+   - View results!
+
+### **Design Decisions**
+
+| Decision | Why |
+|----------|-----|
+| Next.js 14 (App Router) | Modern React patterns, server components, built-in optimization |
+| TypeScript | Type safety, better IDE support, fewer runtime errors |
+| Tailwind CSS | Rapid styling, consistent design system, dark mode support |
+| Client-side rendering | Better for interactive query interface, no SSR needed |
+| Axios over fetch | Interceptors, better error handling, concise API |
+| Dark theme | Easier on eyes for developers, modern aesthetic |
+
+### **Future Enhancements**
+- 🔐 Authentication (GitHub OAuth)
+- 📊 Commit timeline visualization
+- 🔄 Real-time status updates via WebSockets
+- 📁 Multiple repository management
+- 💾 Query history
+- 📤 Export results (JSON, CSV, PDF)
+- 🎨 Theme customization
+- 📱 Mobile app (React Native)
+
+---
+
+## **Updated: 8 March 2026**
+
+**Completed**: Steps 1-7 (Full Stack Implementation Complete! 🎉)  
+- ✅ Git Commit Extraction
+- ✅ AI Summarization (Groq LLM)
+- ✅ Embeddings Generation (sentence-transformers)
+- ✅ Vector Storage (FAISS with session persistence)
+- ✅ RAG Retrieval Pipeline
+- ✅ FastAPI Backend
+- ✅ Next.js Frontend
+
+**Status**: Production-ready prototype  
+**Next Steps**: Testing, deployment, feature enhancements

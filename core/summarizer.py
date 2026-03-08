@@ -12,7 +12,7 @@ try:
 except ImportError:
     raise ImportError("groq not installed. Run: pip install groq")
 
-from diff_processor import extract_diff_summary, format_diff_for_llm
+from .diff_processor import extract_diff_summary, format_diff_for_llm
 
 
 class CommitSummarizer:
