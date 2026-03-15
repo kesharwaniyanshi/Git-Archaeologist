@@ -142,6 +142,7 @@ cd frontend && npm run build
 ## 📚 Documentation
 
 See [PROJECT_DOCUMENTATION.md](PROJECT_DOCUMENTATION.md) for a complete technical walkthrough of all 7 build phases.
+Cloud database comparison and selection guidance is now included inside [PROJECT_DOCUMENTATION.md](PROJECT_DOCUMENTATION.md).
 
 ## 🔒 Environment Setup
 

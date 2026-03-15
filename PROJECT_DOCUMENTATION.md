@@ -743,6 +743,93 @@ npm start
 
 ---
 
+## **Cloud Database Decision Guide (March 2026)**
+
+This section compares cloud PostgreSQL options for the current architecture:
+- FastAPI backend
+- SQLAlchemy + psycopg
+- pgvector for embeddings
+- Persistent repositories/commits/chat/summaries in PostgreSQL
+
+### **Decision Criteria**
+
+| Criteria | Why it matters for this project |
+|----------|----------------------------------|
+| PostgreSQL compatibility | Existing code already uses SQLAlchemy + psycopg |
+| pgvector support | Required for embedding similarity search |
+| Dev speed | We are iterating quickly across migration phases |
+| Operational overhead | Small team; managed service is preferred |
+| Cost predictability | Early-stage product, needs low fixed cost |
+| Production path | Should scale from prototype to staging/production |
+
+### **Cloud Options Compared**
+
+| Option | Best Fit | pgvector | Ops Overhead | Cost Shape | Key Tradeoff |
+|--------|----------|----------|--------------|------------|---------------|
+| Neon Postgres | Fast product teams, branch-style workflows | Strong support | Low | Low-medium | Fewer low-level infra knobs |
+| Supabase Postgres | App + DB platform users | Strong support | Low | Low-medium | More platform opinionation |
+| AWS RDS/Aurora Postgres | Enterprise AWS-native teams | Version-dependent | Medium-high | Medium-high | More setup and tuning effort |
+| Google Cloud SQL Postgres | GCP-native teams | Version-dependent | Medium | Medium | Less developer-friendly branching |
+| Azure Database for PostgreSQL | Azure-native teams | Tier/version-dependent | Medium | Medium | Extension support varies by plan |
+
+### **Recommendation for Git Archaeologist**
+
+Use **Neon Postgres** as the primary cloud database for the current stage.
+
+**Why Neon is the best fit now:**
+1. Works directly with current `postgresql+psycopg` connection pattern.
+2. Good pgvector support for current embedding architecture.
+3. Low operational overhead while still production-capable.
+4. Fast path from local prototype to shared staging.
+5. Keeps migration velocity high for remaining phases.
+
+**Strong alternative:**
+- **Supabase Postgres**, if you want a more integrated dashboard-centric platform.
+
+### **Cloud Adoption (Minimal Path)**
+
+1. Create a managed PostgreSQL instance (Neon recommended).
+2. Copy connection string and set `.env` values:
+
+```env
+VECTOR_BACKEND=pgvector
+DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST:5432/DBNAME?sslmode=require
+```
+
+3. Start backend and run one `/analyze` call to trigger table creation.
+4. Verify persistence behavior across restart.
+
+### **Verification Checklist**
+
+After first successful query, verify tables:
+1. `repositories`
+2. `commits`
+3. `commit_embeddings`
+4. `commit_summaries`
+5. `chat_sessions`
+6. `chat_messages`
+
+Behavior to validate:
+1. Re-running similar questions reduces LLM calls over time (summary reuse).
+2. Chat follow-up queries keep the same `chat_session_id` in a UI session.
+3. Commit index and embeddings reload from DB after backend restart.
+
+### **Local vs Cloud Usage Strategy**
+
+Use both, with clear purpose:
+1. **Cloud Postgres**: primary for shared/staging-like testing and durability.
+2. **Local Postgres**: fallback for offline development and fast debugging.
+
+### **Migration Safety Notes**
+
+1. Keep dev/staging/prod DB URLs separate.
+2. Never commit real credentials.
+3. URL-encode password if it contains special characters.
+4. Prefer pooled connection URLs in managed environments.
+5. Confirm `vector` extension availability in selected provider/tier.
+
+---
+
 ## **Updated: 8 March 2026**
 
 **Completed**: Steps 1-7 (Full Stack Implementation Complete! 🎉)  
