@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List, Optional
 import json
+import os
 
 from core.embeddings import EmbeddingEngine, build_commit_semantic_text, rank_commits_by_semantic
 from core.summarizer import CommitSummarizer
@@ -38,11 +39,35 @@ class QueryDrivenAnalyzer:
         self.embedding_engine: Optional[EmbeddingEngine] = None
         self.commit_embeddings: List[List[float]] = []
         self.session_dir = session_dir or Path(".") / ".git_arch_sessions" / "default"
-        self.vector_store: Optional[LocalVectorStore] = None
+        self.vector_backend = os.getenv("VECTOR_BACKEND", "faiss").strip().lower()
+        self.vector_store: Optional[object] = None
+        self.index_store: Optional[object] = None
+
+        if self.vector_backend == "pgvector":
+            try:
+                from core.index_store_pg import PostgresIndexStore
+
+                self.index_store = PostgresIndexStore()
+            except Exception as exc:
+                print(f"Postgres index store unavailable; continuing without DB commit index persistence: {exc}")
+
+    def _create_vector_store(self, dimension: int = 384) -> object:
+        if self.vector_backend == "pgvector":
+            from core.vector_store_pg import PostgresVectorStore
+
+            return PostgresVectorStore(dimension=dimension)
+        return LocalVectorStore(dimension=dimension)
 
     def index_repository(self, max_commits: Optional[int] = None, save_to_disk: bool = True) -> Dict:
         print(f"Indexing repository: {self.repo_path}")
         self.commits_index = ingest_light(self.repo_path, max_commits or 1000)
+
+        if self.index_store and self.commits_index:
+            try:
+                self.index_store.replace_commits(self.repo_path, self.commits_index)
+                print(f"Persisted {len(self.commits_index)} commits to PostgreSQL")
+            except Exception as exc:
+                print(f"Failed to persist commit index to PostgreSQL: {exc}")
 
         if self.use_embeddings and self.commits_index:
             try:
@@ -75,11 +100,11 @@ class QueryDrivenAnalyzer:
         if not self.commit_embeddings or not self.commits_index:
             return
 
-        self.vector_store = LocalVectorStore(dimension=len(self.commit_embeddings[0]))
+        self.vector_store = self._create_vector_store(dimension=len(self.commit_embeddings[0]))
         metadata = {commit["hash"]: commit for commit in self.commits_index}
         self.vector_store.add_embeddings(self.commit_embeddings, metadata)
         self.vector_store.save(str(self.session_dir))
-        print(f"Saved vector store to {self.session_dir}")
+        print(f"Saved vector store using backend={self.vector_backend}")
 
     def _retrieve_candidates(self, query: str, analyze_candidates: int) -> List[Dict]:
         heuristic_scores = candidate_commit_scores(query, self.commits_index)
@@ -182,6 +207,24 @@ class QueryDrivenAnalyzer:
         print("Session saved")
 
     def load_session(self) -> bool:
+        if self.index_store:
+            try:
+                print("Loading commit index from PostgreSQL")
+                self.commits_index = self.index_store.load_commits(self.repo_path)
+                if self.commits_index:
+                    self.load_cache(str(Path(self.session_dir) / "cache.json"))
+                    if self.use_embeddings:
+                        try:
+                            self.vector_store = self._create_vector_store()
+                            self.vector_store.load(str(self.session_dir))
+                            print(f"Loaded vector store with {self.vector_store.size()} embeddings")
+                        except Exception as exc:
+                            print(f"Could not load vector store: {exc}")
+                    print(f"Loaded {len(self.commits_index)} commits from PostgreSQL")
+                    return True
+            except Exception as exc:
+                print(f"Failed to load commit index from PostgreSQL: {exc}")
+
         session_path = Path(self.session_dir)
         if not session_path.exists():
             print(f"Session not found at {self.session_dir}")
@@ -194,7 +237,7 @@ class QueryDrivenAnalyzer:
 
             if self.use_embeddings:
                 try:
-                    self.vector_store = LocalVectorStore()
+                    self.vector_store = self._create_vector_store()
                     self.vector_store.load(str(self.session_dir))
                     print(f"Loaded vector store with {self.vector_store.size()} embeddings")
                 except Exception as exc:
