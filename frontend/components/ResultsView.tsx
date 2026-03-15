@@ -1,5 +1,7 @@
 'use client'
 
+import { BadgeCheck, Clock3, Fingerprint, GaugeCircle, ListChecks, MessageSquareText } from 'lucide-react'
+
 interface Result {
   commit_hash: string
   message: string
@@ -24,93 +26,106 @@ export default function ResultsView({ results }: ResultsViewProps) {
   const { answer, confidence, confidence_score, results: commits, metadata } = results
 
   return (
-    <div className="mt-8 space-y-6">
-      {/* Synthesized Answer */}
+    <div className="mt-6 space-y-6 fade-up">
       {answer && (
-        <div className="bg-gradient-to-br from-primary-900/30 to-primary-800/20 border border-primary-700/50 rounded-xl p-6 shadow-xl">
-          <div className="flex items-start justify-between mb-3">
-            <h2 className="text-xl font-semibold text-primary-300">📝 Answer</h2>
+        <div className="rounded-xl surface-panel panel-hover p-5">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 className="inline-flex items-center gap-2 text-base font-semibold tracking-wide">
+              <MessageSquareText className="h-4 w-4 text-[hsl(var(--primary-glow))]" />
+              Synthesized Analysis
+            </h2>
             {confidence && (
-              <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                confidence === 'High' ? 'bg-green-900/50 text-green-300' :
-                confidence === 'Medium' ? 'bg-yellow-900/50 text-yellow-300' :
-                'bg-red-900/50 text-red-300'
+              <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                confidence === 'High' ? 'bg-[hsl(var(--success)/0.2)] text-[hsl(var(--success))]' :
+                confidence === 'Medium' ? 'bg-[hsl(var(--warning)/0.2)] text-[hsl(var(--warning))]' :
+                'bg-[hsl(var(--danger)/0.2)] text-[hsl(var(--danger))]'
               }`}>
                 {confidence} Confidence {confidence_score ? `(${(confidence_score * 100).toFixed(0)}%)` : ''}
               </span>
             )}
           </div>
-          <p className="text-gray-200 leading-relaxed whitespace-pre-wrap">{answer}</p>
+          <p className="whitespace-pre-wrap text-sm leading-7 text-[hsl(var(--foreground))]">{answer}</p>
         </div>
       )}
 
-      {/* Metadata */}
       {metadata && (
-        <div className="bg-gray-800/30 border border-gray-700 rounded-lg p-4">
-          <div className="grid grid-cols-3 gap-4 text-sm">
-            <div>
-              <span className="text-gray-400">Total Commits:</span>
-              <span className="ml-2 text-gray-200 font-medium">{metadata.total_commits_indexed}</span>
+        <div className="rounded-xl surface-panel panel-hover p-4">
+          <div className="grid gap-3 text-sm sm:grid-cols-3">
+            <div className="rounded-lg bg-[hsl(var(--surface-0)/0.8)] p-3">
+              <span className="mb-1 inline-flex items-center gap-1.5 text-xs uppercase tracking-[0.14em] text-[hsl(var(--muted-foreground))]">
+                <ListChecks className="h-3.5 w-3.5" />
+                Total Commits
+              </span>
+              <span className="mt-1 block font-mono text-base text-[hsl(var(--foreground))]">{metadata.total_commits_indexed ?? '-'}</span>
             </div>
-            <div>
-              <span className="text-gray-400">Candidates:</span>
-              <span className="ml-2 text-gray-200 font-medium">{metadata.candidates_analyzed}</span>
+            <div className="rounded-lg bg-[hsl(var(--surface-0)/0.8)] p-3">
+              <span className="mb-1 inline-flex items-center gap-1.5 text-xs uppercase tracking-[0.14em] text-[hsl(var(--muted-foreground))]">
+                <GaugeCircle className="h-3.5 w-3.5" />
+                Candidates
+              </span>
+              <span className="mt-1 block font-mono text-base text-[hsl(var(--foreground))]">{metadata.candidates_analyzed ?? '-'}</span>
             </div>
-            <div>
-              <span className="text-gray-400">Time:</span>
-              <span className="ml-2 text-gray-200 font-medium">{metadata.query_time_seconds?.toFixed(2)}s</span>
+            <div className="rounded-lg bg-[hsl(var(--surface-0)/0.8)] p-3">
+              <span className="mb-1 inline-flex items-center gap-1.5 text-xs uppercase tracking-[0.14em] text-[hsl(var(--muted-foreground))]">
+                <Clock3 className="h-3.5 w-3.5" />
+                Execution Time
+              </span>
+              <span className="mt-1 block font-mono text-base text-[hsl(var(--foreground))]">{metadata.query_time_seconds?.toFixed(2) ?? '-'}s</span>
             </div>
           </div>
         </div>
       )}
 
-      {/* Relevant Commits */}
       {commits && commits.length > 0 && (
         <div className="space-y-4">
-          <h3 className="text-lg font-semibold text-gray-300">🔎 Relevant Commits</h3>
+          <h3 className="inline-flex items-center gap-2 text-sm font-semibold uppercase tracking-[0.18em] text-[hsl(var(--muted-foreground))]">
+            <Fingerprint className="h-3.5 w-3.5" />
+            Relevant Evidence
+          </h3>
           {commits.map((commit, idx) => (
             <div
               key={commit.commit_hash}
-              className="bg-gray-800/50 border border-gray-700 rounded-lg p-5 hover:border-primary-700/50 transition-colors"
+              className="rounded-xl surface-panel panel-hover p-5"
             >
-              <div className="flex items-start justify-between mb-3">
-                <div className="flex items-center gap-3">
-                  <span className="text-2xl font-bold text-primary-500">#{idx + 1}</span>
-                  <code className="px-2 py-1 bg-gray-900/70 text-primary-400 text-xs rounded font-mono">
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="text-xl font-bold text-[hsl(var(--primary))]">#{idx + 1}</span>
+                  <code className="rounded bg-[hsl(var(--surface-0)/0.85)] px-2 py-1 text-xs text-[hsl(var(--primary-glow))]">
                     {commit.commit_hash.substring(0, 8)}
                   </code>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-gray-400">Relevance</span>
+                  <span className="text-xs text-[hsl(var(--muted-foreground))]">Relevance</span>
                   <div className="flex items-center gap-1">
-                    <div className="w-24 h-2 bg-gray-700 rounded-full overflow-hidden">
+                    <div className="h-2 w-24 overflow-hidden rounded-full bg-[hsl(var(--surface-3))]">
                       <div
-                        className="h-full bg-gradient-to-r from-primary-600 to-primary-400"
+                        className="h-full bg-gradient-to-r from-[hsl(var(--primary))] to-[hsl(var(--primary-glow))]"
                         style={{ width: `${Math.min(commit.relevance_score * 100, 100)}%` }}
                       />
                     </div>
-                    <span className="text-xs text-gray-300 font-medium">
+                    <span className="text-xs font-medium text-[hsl(var(--foreground))]">
                       {(commit.relevance_score * 100).toFixed(0)}%
                     </span>
                   </div>
                 </div>
               </div>
 
-              <h4 className="text-gray-200 font-medium mb-2">{commit.message}</h4>
-              
+              <h4 className="mb-2 text-sm font-semibold text-[hsl(var(--foreground))]">{commit.message}</h4>
+
               {commit.summary && commit.summary !== commit.message && (
-                <div className="mt-3 pt-3 border-t border-gray-700">
-                  <p className="text-sm text-gray-400 mb-1">AI Summary:</p>
-                  <p className="text-sm text-gray-300">{commit.summary}</p>
+                <div className="mt-3 border-t border-[hsl(var(--border))] pt-3">
+                  <p className="mb-1 text-xs uppercase tracking-[0.14em] text-[hsl(var(--muted-foreground))]">AI Summary</p>
+                  <p className="text-sm leading-6 text-[hsl(var(--foreground))]">{commit.summary}</p>
                 </div>
               )}
-              
+
               {commit.status && (
                 <div className="mt-3 flex items-center gap-2">
-                  <span className={`px-2 py-0.5 rounded text-xs ${
-                    commit.status === 'success' ? 'bg-green-900/30 text-green-400' :
-                    'bg-gray-700 text-gray-400'
+                  <span className={`rounded px-2 py-0.5 text-xs ${
+                    commit.status === 'success' ? 'bg-[hsl(var(--success)/0.2)] text-[hsl(var(--success))]' :
+                    'bg-[hsl(var(--surface-3))] text-[hsl(var(--muted-foreground))]'
                   }`}>
+                    {commit.status === 'success' ? <BadgeCheck className="mr-1 inline h-3 w-3" /> : null}
                     {commit.status}
                   </span>
                 </div>

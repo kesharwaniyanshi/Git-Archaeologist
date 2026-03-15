@@ -1,15 +1,18 @@
 'use client'
 
 import { useState } from 'react'
+import { Database, Play, ScanSearch, SlidersHorizontal, Sparkles } from 'lucide-react'
 import { analyzeQuery } from '@/lib/api'
 
 interface SearchInterfaceProps {
   onResults: (results: any) => void
   onLoading: (loading: boolean) => void
   onError: (error: string | null) => void
+  onQuerySubmitted?: (query: string) => void
+  chatSessionId?: string | null
 }
 
-export default function SearchInterface({ onResults, onLoading, onError }: SearchInterfaceProps) {
+export default function SearchInterface({ onResults, onLoading, onError, onQuerySubmitted, chatSessionId }: SearchInterfaceProps) {
   const [query, setQuery] = useState('')
   const [repoPath, setRepoPath] = useState('/Users/yanshikesharwani/vscode/Git Archaeologist')
   const [topK, setTopK] = useState(5)
@@ -25,11 +28,13 @@ export default function SearchInterface({ onResults, onLoading, onError }: Searc
     onLoading(true)
     onError(null)
     onResults(null)
+    onQuerySubmitted?.(query)
 
     try {
       const data = await analyzeQuery({
         repo_path: repoPath,
         query: query,
+        chat_session_id: chatSessionId ?? undefined,
         top_k: topK,
         max_commits: maxCommits,
       })
@@ -42,37 +47,47 @@ export default function SearchInterface({ onResults, onLoading, onError }: Searc
   }
 
   return (
-    <div className="bg-gray-800/50 backdrop-blur-sm rounded-xl p-6 shadow-2xl border border-gray-700">
-      <form onSubmit={handleSubmit} className="space-y-4">
+    <div className="fade-up rounded-2xl surface-panel panel-hover p-5 sm:p-6">
+      <div className="terminal-chrome">
+        <span className="terminal-dot terminal-dot-danger" />
+        <span className="terminal-dot terminal-dot-warning" />
+        <span className="terminal-dot terminal-dot-success" />
+        <span className="ml-2 text-xs font-mono text-[hsl(var(--muted-foreground))]">command-bar.tsx</span>
+      </div>
+
+      <form onSubmit={handleSubmit} className="mt-4 space-y-5">
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-2">
+          <label className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-[hsl(var(--muted-foreground))]">
+            <Database className="h-3.5 w-3.5" />
             Repository Path
           </label>
           <input
             type="text"
             value={repoPath}
             onChange={(e) => setRepoPath(e.target.value)}
-            className="w-full px-4 py-2 bg-gray-900/50 border border-gray-600 rounded-lg text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+            className="electric-ring h-11 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--surface-0)/0.8)] px-3 text-sm text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))]"
             placeholder="/path/to/your/repo"
           />
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-2">
+          <label className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-[hsl(var(--muted-foreground))]">
+            <ScanSearch className="h-3.5 w-3.5" />
             Your Question
           </label>
           <textarea
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            rows={3}
-            className="w-full px-4 py-2 bg-gray-900/50 border border-gray-600 rounded-lg text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent resize-none"
+            rows={4}
+            className="electric-ring w-full resize-none rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--surface-0)/0.8)] px-3 py-2 text-sm leading-6 text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))]"
             placeholder="Why was authentication changed? What caused the performance improvement?"
           />
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid gap-4 sm:grid-cols-2">
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">
+            <label className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-[hsl(var(--muted-foreground))]">
+              <Sparkles className="h-3.5 w-3.5" />
               Top Results
             </label>
             <input
@@ -81,29 +96,35 @@ export default function SearchInterface({ onResults, onLoading, onError }: Searc
               onChange={(e) => setTopK(parseInt(e.target.value))}
               min={1}
               max={20}
-              className="w-full px-4 py-2 bg-gray-900/50 border border-gray-600 rounded-lg text-gray-100 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              className="electric-ring h-11 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--surface-0)/0.8)] px-3 text-sm text-[hsl(var(--foreground))]"
             />
           </div>
+
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">
-              Max Commits
+            <label className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-[hsl(var(--muted-foreground))]">
+              <SlidersHorizontal className="h-3.5 w-3.5" />
+              Max Commits <span className="ml-1 font-mono text-[hsl(var(--primary))]">{maxCommits}</span>
             </label>
             <input
-              type="number"
+              type="range"
               value={maxCommits}
               onChange={(e) => setMaxCommits(parseInt(e.target.value))}
-              min={10}
-              max={10000}
-              className="w-full px-4 py-2 bg-gray-900/50 border border-gray-600 rounded-lg text-gray-100 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              min={50}
+              max={5000}
+              step={50}
+              className="mt-3 h-2 w-full cursor-pointer appearance-none rounded-lg bg-[hsl(var(--surface-3))] accent-[hsl(var(--primary))]"
             />
           </div>
         </div>
 
         <button
           type="submit"
-          className="w-full bg-gradient-to-r from-primary-600 to-primary-700 hover:from-primary-500 hover:to-primary-600 text-white font-semibold py-3 px-6 rounded-lg transition-all duration-200 shadow-lg hover:shadow-primary-500/50"
+          className="glow-electric electric-ring w-full rounded-lg border border-[hsl(var(--primary)/0.5)] bg-[hsl(var(--primary))] px-4 py-3 text-sm font-semibold text-[hsl(var(--surface-0))] transition duration-200 hover:-translate-y-[1px] hover:bg-[hsl(var(--primary-glow))]"
         >
-          🔍 Analyze Repository
+          <span className="inline-flex items-center gap-2">
+            <Play className="h-4 w-4" />
+            Excavate Commit History
+          </span>
         </button>
       </form>
     </div>
