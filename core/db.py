@@ -13,6 +13,9 @@ def get_database_url() -> str:
     database_url = os.getenv("DATABASE_URL", "")
     if not database_url:
         raise ValueError("DATABASE_URL is not set. Configure it in your environment.")
+    if database_url.startswith("postgresql://"):
+        # Accept common Postgres URL form and force psycopg driver for SQLAlchemy.
+        database_url = "postgresql+psycopg://" + database_url[len("postgresql://"):]
     return database_url
 
 

@@ -42,14 +42,17 @@ class QueryDrivenAnalyzer:
         self.vector_backend = os.getenv("VECTOR_BACKEND", "faiss").strip().lower()
         self.vector_store: Optional[object] = None
         self.index_store: Optional[object] = None
+        self.summary_store: Optional[object] = None
 
         if self.vector_backend == "pgvector":
             try:
                 from core.index_store_pg import PostgresIndexStore
+                from core.summary_store_pg import PostgresSummaryStore
 
                 self.index_store = PostgresIndexStore()
+                self.summary_store = PostgresSummaryStore()
             except Exception as exc:
-                print(f"Postgres index store unavailable; continuing without DB commit index persistence: {exc}")
+                print(f"Postgres stores unavailable; continuing without DB persistence: {exc}")
 
     def _create_vector_store(self, dimension: int = 384) -> object:
         if self.vector_backend == "pgvector":
@@ -156,6 +159,15 @@ class QueryDrivenAnalyzer:
         print(f"Retrieved {len(candidates)} candidate commits")
 
         candidate_hashes = [commit["hash"] for commit in candidates]
+
+        if self.summary_store and candidate_hashes:
+            try:
+                persisted = self.summary_store.get_summaries_for_hashes(candidate_hashes)
+                if persisted:
+                    self.summary_cache.update(persisted)
+            except Exception as exc:
+                print(f"Failed loading persisted summaries from PostgreSQL: {exc}")
+
         commits_with_diffs = fetch_diffs_for_commits(self.repo_path, candidate_hashes)
         commits_by_hash = {commit["hash"]: commit for commit in commits_with_diffs}
 
@@ -174,6 +186,11 @@ class QueryDrivenAnalyzer:
             print(f"[{index}/{len(candidates)}] Summarizing {commit_hash[:8]} - {commit_data['message'][:60]}")
             summary = self.summarizer.summarize_commit(commit_data)
             self.summary_cache[commit_hash] = summary
+            if self.summary_store:
+                try:
+                    self.summary_store.upsert_summary(summary)
+                except Exception as exc:
+                    print(f"Failed persisting commit summary to PostgreSQL: {exc}")
             analyzed.append(summary)
 
         successful = [item for item in analyzed if item.get("status") == "success"]
