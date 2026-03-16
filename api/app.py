@@ -13,13 +13,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 import os
+import importlib
+from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
+from starlette.middleware.sessions import SessionMiddleware
 
 from analyzers.query_analyzer import QueryDrivenAnalyzer
 from pipelines.rag_pipeline import RAGPipeline
+
+# Load local .env so OAuth and DB settings work without shell export.
+load_dotenv()
 
 
 app = FastAPI(
@@ -38,6 +46,14 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+# Cookie-backed session storage for OAuth login state.
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.getenv("APP_SESSION_SECRET", "dev-insecure-change-me"),
+    same_site="lax",
+    https_only=False,
 )
 
 
@@ -89,6 +105,11 @@ class ChatSessionCreateResponse(BaseModel):
 class ChatHistoryResponse(BaseModel):
     chat_session_id: str
     messages: List[Dict]
+
+
+class AuthStatusResponse(BaseModel):
+    authenticated: bool
+    user: Optional[Dict] = None
 
 
 class AnalyzerRegistry:
@@ -160,6 +181,84 @@ def _create_chat_store():
 chat_store = _create_chat_store()
 
 
+def _create_auth_store():
+    if not os.getenv("DATABASE_URL"):
+        return None
+    try:
+        from core.auth_store_pg import PostgresAuthStore
+
+        return PostgresAuthStore()
+    except Exception as exc:
+        print(f"Auth store disabled: {exc}")
+        return None
+
+
+auth_store = _create_auth_store()
+
+
+def _create_oauth_client():
+    client_id = os.getenv("GITHUB_CLIENT_ID")
+    client_secret = os.getenv("GITHUB_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        return None
+
+    try:
+        module = importlib.import_module("authlib.integrations.starlette_client")
+        OAuth = getattr(module, "OAuth")
+    except Exception as exc:
+        print(f"OAuth client disabled: {exc}")
+        return None
+
+    oauth = OAuth()
+    oauth.register(
+        name="github",
+        client_id=client_id,
+        client_secret=client_secret,
+        authorize_url="https://github.com/login/oauth/authorize",
+        access_token_url="https://github.com/login/oauth/access_token",
+        api_base_url="https://api.github.com/",
+        client_kwargs={"scope": "read:user user:email"},
+    )
+    return oauth
+
+
+oauth_client = _create_oauth_client()
+
+
+def _get_oauth_client():
+    global oauth_client
+    if oauth_client:
+        return oauth_client
+
+    oauth_client = _create_oauth_client()
+    return oauth_client
+
+
+def _missing_oauth_config() -> List[str]:
+    missing = []
+    for key in ["GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET", "APP_SESSION_SECRET", "FRONTEND_URL"]:
+        if not os.getenv(key):
+            missing.append(key)
+    return missing
+
+
+def _resolve_oauth_redirect_uri(request: Request) -> str:
+    inferred = str(request.url_for("auth_github_callback"))
+    configured = os.getenv("GITHUB_OAUTH_REDIRECT_URI")
+    if not configured:
+        return inferred
+
+    configured_host = (urlparse(configured).hostname or "").lower()
+    request_host = (request.url.hostname or "").lower()
+    local_hosts = {"localhost", "127.0.0.1"}
+
+    # For local dev, keep login and callback on the same host to preserve session state cookie.
+    if configured_host in local_hosts and request_host in local_hosts and configured_host != request_host:
+        return inferred
+
+    return configured
+
+
 def _ensure_index(analyzer: QueryDrivenAnalyzer, max_commits: int, force_reindex: bool = False) -> Dict:
     if force_reindex:
         stats = analyzer.index_repository(max_commits=max_commits)
@@ -188,6 +287,88 @@ def health() -> Dict[str, str]:
 @app.get("/status")
 def status() -> Dict:
     return registry.status()
+
+
+@app.get("/auth/github/login")
+async def auth_github_login(request: Request):
+    oauth = _get_oauth_client()
+    if not oauth:
+        missing = _missing_oauth_config()
+        detail = "GitHub OAuth is not configured"
+        if missing:
+            detail = f"GitHub OAuth is not configured. Missing env vars: {', '.join(missing)}"
+        raise HTTPException(status_code=503, detail=detail)
+
+    redirect_uri = _resolve_oauth_redirect_uri(request)
+    return await oauth.github.authorize_redirect(request, redirect_uri)
+
+
+@app.get("/auth/github/callback")
+async def auth_github_callback(request: Request):
+    oauth = _get_oauth_client()
+    if not oauth:
+        missing = _missing_oauth_config()
+        detail = "GitHub OAuth is not configured"
+        if missing:
+            detail = f"GitHub OAuth is not configured. Missing env vars: {', '.join(missing)}"
+        raise HTTPException(status_code=503, detail=detail)
+
+    token = await oauth.github.authorize_access_token(request)
+    profile_resp = await oauth.github.get("user", token=token)
+    profile = profile_resp.json()
+
+    # GitHub may omit public email from /user; fetch primary email when available.
+    if not profile.get("email"):
+        emails_resp = await oauth.github.get("user/emails", token=token)
+        emails = emails_resp.json()
+        if isinstance(emails, list):
+            primary = next((entry for entry in emails if entry.get("primary")), None)
+            if primary and primary.get("email"):
+                profile["email"] = primary["email"]
+
+    user_data = {
+        "github_id": str(profile.get("id", "")),
+        "login": profile.get("login"),
+        "email": profile.get("email"),
+        "name": profile.get("name"),
+        "avatar_url": profile.get("avatar_url"),
+    }
+
+    persisted_user = user_data
+    if auth_store:
+        try:
+            persisted_user = auth_store.upsert_user(profile)
+        except Exception as exc:
+            print(f"Failed to persist OAuth user: {exc}")
+
+    request.session["user"] = persisted_user
+
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    return RedirectResponse(url=f"{frontend_url}/?auth=success")
+
+
+@app.get("/auth/me", response_model=AuthStatusResponse)
+def auth_me(request: Request) -> AuthStatusResponse:
+    user = request.session.get("user")
+    if not user:
+        return AuthStatusResponse(authenticated=False, user=None)
+
+    if auth_store and user.get("github_id"):
+        try:
+            db_user = auth_store.get_user_by_github_id(user["github_id"])
+            if db_user:
+                request.session["user"] = db_user
+                user = db_user
+        except Exception as exc:
+            print(f"Failed to refresh auth user from DB: {exc}")
+
+    return AuthStatusResponse(authenticated=True, user=user)
+
+
+@app.post("/auth/logout")
+def auth_logout(request: Request) -> Dict[str, str]:
+    request.session.clear()
+    return {"message": "logged_out"}
 
 
 @app.post("/index")
