@@ -1,10 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import SearchInterface from '@/components/SearchInterface'
 import ResultsView from '@/components/ResultsView'
 import Header from '@/components/Header'
 import ScanHistory from '@/components/ScanHistory'
+import { getAuthMe, getGitHubLoginUrl, logoutAuth, type AuthUser } from '@/lib/api'
 
 type ScanRecord = {
   id: string
@@ -22,6 +23,35 @@ export default function Home() {
   const [lastQuery, setLastQuery] = useState('')
   const [scans, setScans] = useState<ScanRecord[]>([])
   const [chatSessionId, setChatSessionId] = useState<string | null>(null)
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null)
+  const [authLoading, setAuthLoading] = useState(true)
+
+  useEffect(() => {
+    const loadAuth = async () => {
+      try {
+        const auth = await getAuthMe()
+        setAuthUser(auth.authenticated ? auth.user : null)
+      } catch {
+        setAuthUser(null)
+      } finally {
+        setAuthLoading(false)
+      }
+    }
+
+    loadAuth()
+  }, [])
+
+  const handleLogin = () => {
+    window.location.href = getGitHubLoginUrl()
+  }
+
+  const handleLogout = async () => {
+    try {
+      await logoutAuth()
+    } finally {
+      setAuthUser(null)
+    }
+  }
 
   const handleResults = (data: any) => {
     setResults(data)
@@ -42,7 +72,14 @@ export default function Home() {
 
   return (
     <main className="min-h-screen">
-      <Header sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((v) => !v)} />
+      <Header
+        sidebarOpen={sidebarOpen}
+        onToggleSidebar={() => setSidebarOpen((v) => !v)}
+        authUser={authUser}
+        authLoading={authLoading}
+        onLogin={handleLogin}
+        onLogout={handleLogout}
+      />
       <section className="mx-auto flex w-full max-w-[1500px] gap-0 px-3 pb-8 pt-4 sm:px-5 lg:px-8">
         {sidebarOpen && (
           <aside className="fade-up hidden w-[320px] shrink-0 border-r border-[hsl(var(--border))] pr-4 lg:block">

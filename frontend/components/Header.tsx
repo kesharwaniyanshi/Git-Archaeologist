@@ -1,11 +1,23 @@
 import { Activity, PanelLeftClose, PanelLeftOpen, SearchCode } from 'lucide-react'
 
+type AuthUser = {
+  login?: string
+  name?: string | null
+  avatar_url?: string | null
+}
+
 type HeaderProps = {
   sidebarOpen: boolean
   onToggleSidebar: () => void
+  authUser: AuthUser | null
+  authLoading: boolean
+  onLogin: () => void
+  onLogout: () => void
 }
 
-export default function Header({ sidebarOpen, onToggleSidebar }: HeaderProps) {
+export default function Header({ sidebarOpen, onToggleSidebar, authUser, authLoading, onLogin, onLogout }: HeaderProps) {
+  const displayName = authUser?.name || authUser?.login || 'Signed In'
+
   return (
     <header className="border-b border-[hsl(var(--border))] bg-[hsl(var(--surface-1)/0.85)] backdrop-blur-md">
       <div className="mx-auto flex w-full max-w-[1500px] items-center justify-between gap-3 px-3 py-3 sm:px-5 lg:px-8">
@@ -37,9 +49,39 @@ export default function Header({ sidebarOpen, onToggleSidebar }: HeaderProps) {
           </div>
         </div>
 
-        <div className="status-pill inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium text-[hsl(var(--primary-glow))]">
-          <Activity className="h-3.5 w-3.5 text-[hsl(var(--success))]" />
-          API Ready
+        <div className="flex items-center gap-2">
+          {authUser ? (
+            <>
+              <div className="hidden items-center gap-2 rounded-full border border-[hsl(var(--border-soft))] bg-[hsl(var(--surface-2))] px-3 py-1 text-xs text-[hsl(var(--foreground))] sm:inline-flex">
+                {authUser.avatar_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={authUser.avatar_url} alt={displayName} className="h-4 w-4 rounded-full" />
+                ) : null}
+                <span>{displayName}</span>
+              </div>
+              <button
+                type="button"
+                onClick={onLogout}
+                className="electric-ring inline-flex h-9 items-center justify-center rounded-md border border-[hsl(var(--border-soft))] bg-[hsl(var(--surface-2))] px-3 text-xs font-medium text-[hsl(var(--foreground))] transition hover:border-[hsl(var(--primary)/0.4)] hover:text-[hsl(var(--primary-glow))]"
+              >
+                Sign out
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={onLogin}
+              disabled={authLoading}
+              className="electric-ring inline-flex h-9 items-center justify-center rounded-md border border-[hsl(var(--border-soft))] bg-[hsl(var(--surface-2))] px-3 text-xs font-medium text-[hsl(var(--foreground))] transition hover:border-[hsl(var(--primary)/0.4)] hover:text-[hsl(var(--primary-glow))] disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              {authLoading ? 'Checking...' : 'Sign in with GitHub'}
+            </button>
+          )}
+
+          <div className="status-pill inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium text-[hsl(var(--primary-glow))]">
+            <Activity className="h-3.5 w-3.5 text-[hsl(var(--success))]" />
+            API Ready
+          </div>
         </div>
       </div>
     </header>
