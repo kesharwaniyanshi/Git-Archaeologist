@@ -2,15 +2,9 @@
 
 import { useEffect, useState } from 'react'
 import SearchInterface from '@/components/SearchInterface'
-import ResultsView from '@/components/ResultsView'
 import Header from '@/components/Header'
 import ScanHistory from '@/components/ScanHistory'
 import AuthModal from '@/components/auth/AuthModal'
-import {
-  createChatSession,
-  getChatHistory,
-  listChatSessions,
-} from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 
 type ScanRecord = {
@@ -34,23 +28,9 @@ export default function Home() {
 
   const { user: authUser, loading: authLoading, logout } = useAuth()
 
-  const loadSessions = async () => {
-    try {
-      const data = await listChatSessions(undefined, 50)
-      const mapped: ScanRecord[] = (data.sessions || []).map((session: any) => ({
-        id: session.chat_session_id,
-        query: session.last_user_query || 'New chat session',
-        createdAt: session.updated_at || session.created_at || new Date().toISOString(),
-        resultsCount: Math.max(0, Math.floor((session.message_count || 0) / 2)),
-      }))
-      setScans(mapped)
-    } catch {
-      // Keep local experience functional even if chat listing fails.
-    }
-  }
-
   useEffect(() => {
-    loadSessions()
+    // Chat components are temporarily isolated for Phase 4 Repository Linking focus.
+    setScans([])
   }, [])
 
   const handleLogin = () => {
@@ -63,78 +43,10 @@ export default function Home() {
 
   const handleResults = (data: any) => {
     setResults(data)
-    if (data?.chat_session_id) {
-      setChatSessionId(data.chat_session_id)
-      setActiveScanId(data.chat_session_id)
-    }
-    if (!lastQuery || !data) return
-
-    const record: ScanRecord = {
-      id: data?.chat_session_id || `${Date.now()}`,
-      query: lastQuery,
-      createdAt: new Date().toISOString(),
-      confidence: data.confidence,
-      resultsCount: data.results?.length ?? 0,
-    }
-    setScans((prev) => {
-      const withoutCurrent = prev.filter((item) => item.id !== record.id)
-      return [record, ...withoutCurrent].slice(0, 50)
-    })
   }
 
-  const handleSelectScan = async (scanId: string) => {
-    setActiveScanId(scanId)
-    setChatSessionId(scanId)
-    setError(null)
-    setLoading(true)
-    try {
-      const history = await getChatHistory(scanId)
-      const messages: any[] = history?.messages || []
-      const lastUser = [...messages].reverse().find((msg) => msg.role === 'user')
-      const lastAssistant = [...messages].reverse().find((msg) => msg.role === 'assistant')
-
-      if (lastUser?.content) {
-        setLastQuery(lastUser.content)
-      }
-
-      setResults({
-        query: lastUser?.content || '',
-        answer: lastAssistant?.content || 'No assistant response in this chat yet.',
-        evidence_count: lastAssistant?.metadata?.evidence_count || 0,
-        chat_session_id: scanId,
-      })
-    } catch (err: any) {
-      setError(err?.message || 'Failed to load chat history')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleNewChat = async () => {
-    setError(null)
-    setResults(null)
-    setLastQuery('')
-    try {
-      const created = await createChatSession()
-      const newId = created?.chat_session_id
-      if (!newId) {
-        return
-      }
-      setChatSessionId(newId)
-      setActiveScanId(newId)
-      setScans((prev) => [
-        {
-          id: newId,
-          query: 'New chat session',
-          createdAt: new Date().toISOString(),
-          resultsCount: 0,
-        },
-        ...prev,
-      ])
-    } catch (err: any) {
-      setError(err?.message || 'Failed to create new chat session')
-    }
-  }
+  const handleSelectScan = async (scanId: string) => {}
+  const handleNewChat = async () => {}
 
   return (
     <main className="min-h-screen">
@@ -163,8 +75,6 @@ export default function Home() {
             onResults={handleResults}
             onLoading={setLoading}
             onError={setError}
-            onQuerySubmitted={setLastQuery}
-            chatSessionId={chatSessionId}
           />
 
           {loading && (
@@ -188,7 +98,19 @@ export default function Home() {
             </div>
           )}
 
-          {results && !loading && <ResultsView results={results} />}
+          {results && !loading && (
+            <div className="fade-up mt-6 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--surface-1))] p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-bold text-[hsl(var(--foreground))]">{results.owner} / {results.name}</h3>
+                  <p className="mt-1 text-sm text-[hsl(var(--muted-foreground))]">Repository successfully mapped and currently actively syncing via Background Threads!</p>
+                </div>
+                <div className="rounded-full border border-[hsl(var(--success)/0.3)] bg-[hsl(var(--success)/0.1)] px-3 py-1 font-mono text-xs font-semibold text-[hsl(var(--success))]">
+                  ACTIVE INGESTION
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </section>
 

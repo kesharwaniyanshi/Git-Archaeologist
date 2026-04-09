@@ -152,6 +152,22 @@ Be direct and technical. Avoid vague phrases."""
             
         except Exception as e:
             raise Exception(f"Groq API error: {str(e)}")
+
+    def _call_groq_synthesis(self, system_prompt: str, user_prompt: str) -> str:
+        """Call Groq with system+user roles and higher token limit for answer synthesis."""
+        try:
+            message = self.client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                model=self.model,
+                temperature=0.4,
+                max_tokens=1000,
+            )
+            return message.choices[0].message.content.strip()
+        except Exception as e:
+            raise Exception(f"Groq API error: {str(e)}")
     
     def summarize_commits_batch(self, commits: list[dict], max_commits: Optional[int] = None) -> list[dict]:
         """

@@ -1,10 +1,19 @@
 from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 
+class LinkRepoRequest(BaseModel):
+    url: str = Field(..., description="Public GitHub repository URL or owner/repo format")
+
+class RepositoryResponse(BaseModel):
+    id: str
+    url: str
+    owner: str
+    name: str
+    last_indexed_commit: Optional[str] = None
+    created_at: str
+
 class IndexRequest(BaseModel):
     repo_path: str = Field(..., description="Public GitHub repository URL")
-    session_dir: Optional[str] = Field(default=None, description="Session directory for persistence")
-    max_commits: int = Field(default=500, ge=1, le=20000)
     use_embeddings: bool = True
     embedding_model: str = "all-MiniLM-L6-v2"
     force_reindex: bool = False

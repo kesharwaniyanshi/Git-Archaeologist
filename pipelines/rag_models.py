@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Dict, Optional
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
 
 
 @dataclass
@@ -17,6 +17,8 @@ class RetrievalResult:
     relevance_score: float
     status: str
     error: Optional[str] = None
+    diff_snippets: Optional[str] = None
+    files_changed: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict:
         return {
@@ -29,6 +31,8 @@ class RetrievalResult:
             "relevance_score": self.relevance_score,
             "status": self.status,
             "error": self.error,
+            "diff_snippets": self.diff_snippets,
+            "files_changed": self.files_changed,
         }
 
 

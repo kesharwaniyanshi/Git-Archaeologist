@@ -134,7 +134,7 @@ def candidate_commit_scores(query: str, commits: List[Dict]) -> Dict[str, float]
 
         commit_ts = _parse_commit_datetime(commit.get("date", "")).timestamp()
         recency = (commit_ts - min_ts) / ts_range
-        scores[commit["hash"]] = 0.6 * msg_score + 0.3 * filename_score + 0.1 * recency
+        scores[commit["hash"]] = 0.35 * msg_score + 0.40 * filename_score + 0.25 * recency
 
     return scores
 

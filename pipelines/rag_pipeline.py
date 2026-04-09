@@ -41,13 +41,12 @@ class RAGPipeline:
         normalized_query = self.query_filter.normalize(query)
         summaries = self.analyzer.answer_question(
             query,
-            top_k=analyze_candidates,
+            top_k=top_k,
             analyze_candidates=analyze_candidates,
         )
 
         scores = candidate_commit_scores(query, self.analyzer.commits_index)
         results: List[RetrievalResult] = []
-        cache_hits = 0
 
         for summary in summaries:
             commit_hash = summary.get("hash")
@@ -68,11 +67,10 @@ class RAGPipeline:
                 relevance_score=scores.get(commit_hash, 0.0),
                 status=summary.get("status", "unknown"),
                 error=summary.get("error"),
+                diff_snippets=summary.get("diff_snippet", ""),
+                files_changed=summary.get("files_changed", []),
             )
             results.append(result)
-
-            if summary.get("status") == "cached":
-                cache_hits += 1
 
         if deduplicate:
             results = self.result_ranker.deduplicate_results(results)
@@ -92,7 +90,6 @@ class RAGPipeline:
         if self.verbose:
             elapsed = time.time() - start_time
             print(f"Retrieved {len(results)} results in {elapsed:.2f}s")
-            print(f"Cache hits: {cache_hits}/{len(summaries)}")
 
         self.query_history.append((normalized_query, results))
         return results
@@ -108,64 +105,84 @@ class RAGPipeline:
         avg_relevance = sum(max(0.0, min(1.0, item.relevance_score)) for item in top) / len(top)
         evidence_breadth = min(len(top), 5) / 5.0
         success_ratio = sum(1 for item in top if item.status != "error") / len(top)
+        has_diffs = sum(1 for item in top if item.diff_snippets) / len(top)
 
-        score = 0.5 * avg_relevance + 0.3 * evidence_breadth + 0.2 * success_ratio
+        score = 0.35 * avg_relevance + 0.25 * evidence_breadth + 0.15 * success_ratio + 0.25 * has_diffs
 
-        if score >= 0.75:
-            return (
-                "High",
-                "Strong relevance across multiple supporting commits with mostly successful evidence.",
-                score,
-            )
-        if score >= 0.45:
-            return "Medium", "Useful evidence exists, but support depth or relevance is moderate.", score
+        if score >= 0.70:
+            return "High", "Strong code-level evidence across multiple commits.", score
+        if score >= 0.40:
+            return "Medium", "Useful evidence exists, but some commits lack detailed diffs.", score
         return "Low", "Limited or weakly relevant evidence supports this conclusion.", score
 
-    def synthesize_answer(self, query: str, results: List[RetrievalResult]) -> str:
+    def synthesize_answer(
+        self,
+        query: str,
+        results: List[RetrievalResult],
+        conversation_history: Optional[List[Dict]] = None,
+    ) -> str:
+        """Synthesize a natural answer using raw diff evidence and optional conversation history."""
         if not results:
             return "No relevant commits were found for this question."
 
-        evidence_lines = [
-            f"- {item.short_hash} | {item.date} | {item.message}\n  Summary: {item.summary}"
-            for item in results[:5]
-        ]
+        # Build rich evidence blocks with actual code diffs
+        evidence_blocks = []
+        for item in results[:5]:
+            block = f"### Commit {item.short_hash} by {item.author} ({item.date})\n"
+            block += f"Message: {item.message}\n"
+            if item.files_changed:
+                block += f"Files: {', '.join(item.files_changed[:8])}\n"
+            if item.diff_snippets:
+                block += f"\nCode changes:\n```\n{item.diff_snippets[:3000]}\n```\n"
+            evidence_blocks.append(block)
 
-        prompt = (
-            "You are a software engineering assistant answering questions about Git history. "
-            "Use only the evidence provided below. Do not invent facts. "
-            "Answer the user's question directly and clearly, and keep the response focused on the question intent.\n\n"
-            "Structure your response as:\n"
-            "1) Direct answer to the question\n"
-            "2) Key supporting evidence from the commits\n"
-            "3) Why this change likely happened\n"
-            "Do not include a confidence label in your response; confidence is added separately by the system.\n\n"
-            "If evidence is partial or ambiguous, state that explicitly and explain what is missing.\n\n"
+        evidence_text = "\n".join(evidence_blocks)
+
+        # Build conversation context for multi-turn
+        history_text = ""
+        if conversation_history:
+            history_lines = []
+            for turn in conversation_history[-6:]:  # Last 6 turns max
+                role = turn.get("role", "user")
+                content = turn.get("content", "")
+                if content:
+                    history_lines.append(f"{role.upper()}: {content[:500]}")
+            if history_lines:
+                history_text = "Previous conversation:\n" + "\n".join(history_lines) + "\n\n"
+
+        system_prompt = (
+            "You are Git Archaeologist, an expert software forensics assistant. "
+            "You analyze Git repository history to answer questions about why and how code evolved.\n\n"
+            "Rules:\n"
+            "- Ground every claim in the commit evidence provided. Cite commit hashes inline (e.g., 'in abc12345').\n"
+            "- When code diffs are available, reference specific lines, functions, or patterns you can see in them.\n"
+            "- Write naturally and conversationally. Avoid rigid numbered lists unless truly helpful.\n"
+            "- If the evidence is partial or ambiguous, say so explicitly.\n"
+            "- If this is a follow-up question, use the conversation history for context.\n"
+            "- Do NOT invent information. Do NOT include a confidence label.\n"
+        )
+
+        user_prompt = (
+            f"{history_text}"
             f"Question: {query}\n\n"
-            "Evidence:\n"
-            + "\n".join(evidence_lines)
+            f"Repository evidence:\n{evidence_text}"
         )
 
         confidence_level, confidence_reason, confidence_score = self._deterministic_confidence(results)
-        confidence_footer = (
-            f"\n\nConfidence (deterministic): {confidence_level} "
-            f"(score={confidence_score:.2f}) - {confidence_reason}"
-        )
 
         try:
-            answer = self.analyzer.summarizer._call_groq(prompt)
-            return answer + confidence_footer
+            answer = self.analyzer.summarizer._call_groq_synthesis(system_prompt, user_prompt)
+            return answer
         except Exception:
+            # Fallback: build a basic answer without LLM
             top = results[0]
             pieces = [
-                f"Most relevant change: {top.message} ({top.short_hash}).",
-                f"Likely reason: {top.summary}",
+                f"Based on the repository history, the most relevant change is {top.short_hash}: \"{top.message}\".",
             ]
+            if top.diff_snippets:
+                pieces.append(f"\nKey code changes:\n```\n{top.diff_snippets[:1000]}\n```")
             if len(results) > 1:
-                pieces.append(f"Related supporting commits: {', '.join(r.short_hash for r in results[1:4])}.")
-            pieces.append(
-                f"Confidence (deterministic): {confidence_level} "
-                f"(score={confidence_score:.2f}) - {confidence_reason}"
-            )
+                pieces.append(f"\nRelated commits: {', '.join(r.short_hash for r in results[1:4])}.")
             return "\n".join(pieces)
 
     def export_results(self, results: List[RetrievalResult], output_file: str, include_history: bool = False) -> None:

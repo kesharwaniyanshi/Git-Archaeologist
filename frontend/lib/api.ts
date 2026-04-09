@@ -32,35 +32,17 @@ export type AuthStatusResponse = {
   user: AuthUser | null
 }
 
-export interface AnalyzeRequest {
-  repo_path: string
-  query: string
-  chat_session_id?: string
-  top_k?: number
-  max_commits?: number
-  use_embeddings?: boolean
+export interface LinkRepoRequest {
+  url: string
 }
 
-export interface AnalyzeResponse {
-  query: string
-  answer: string
-  chat_session_id?: string
-  evidence_count: number
-  evidence?: any[]
-}
-
-export interface IndexRequest {
-  repo_path: string
-  max_commits?: number
-  use_embeddings?: boolean
-}
-
-export interface ChatSessionListItem {
-  chat_session_id: string
-  created_at?: string | null
-  updated_at?: string | null
-  last_user_query: string
-  message_count: number
+export interface RepositoryResponse {
+  id: string
+  url: string
+  owner: string
+  name: string
+  last_indexed_commit?: string
+  created_at: string
 }
 
 export async function healthCheck() {
@@ -75,35 +57,8 @@ export async function getStatus(repoPath: string) {
   return response.data
 }
 
-export async function indexRepository(data: IndexRequest) {
-  const response = await apiClient.post('/index', data)
-  return response.data
-}
-
-export async function analyzeQuery(data: AnalyzeRequest): Promise<AnalyzeResponse> {
-  const response = await apiClient.post('/analyze', data)
-  return response.data
-}
-
-export async function getChatHistory(chatSessionId: string) {
-  const response = await apiClient.get(`/chat/${chatSessionId}`)
-  return response.data
-}
-
-export async function listChatSessions(repoPath?: string, limit: number = 50) {
-  const response = await apiClient.get('/chat', {
-    params: {
-      repo_path: repoPath,
-      limit,
-    },
-  })
-  return response.data
-}
-
-export async function createChatSession(repoPath?: string) {
-  const response = await apiClient.post('/chat/session', {
-    repo_path: repoPath,
-  })
+export async function linkRepository(data: LinkRepoRequest): Promise<RepositoryResponse> {
+  const response = await apiClient.post('/repos/link', data)
   return response.data
 }
 

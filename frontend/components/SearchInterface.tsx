@@ -1,47 +1,39 @@
 'use client'
 
 import { useState } from 'react'
-import { Database, Play, ScanSearch, SlidersHorizontal, Sparkles } from 'lucide-react'
-import { analyzeQuery } from '@/lib/api'
+import { Database, Link, Loader2 } from 'lucide-react'
+import { linkRepository } from '@/lib/api'
+import { toast } from 'sonner'
 
 interface SearchInterfaceProps {
   onResults: (results: any) => void
   onLoading: (loading: boolean) => void
   onError: (error: string | null) => void
-  onQuerySubmitted?: (query: string) => void
-  chatSessionId?: string | null
 }
 
-export default function SearchInterface({ onResults, onLoading, onError, onQuerySubmitted, chatSessionId }: SearchInterfaceProps) {
-  const [query, setQuery] = useState('')
+export default function SearchInterface({ onResults, onLoading, onError }: SearchInterfaceProps) {
   const [repoPath, setRepoPath] = useState('https://github.com/owner/repo')
-  const [topK, setTopK] = useState(5)
-  const [maxCommits, setMaxCommits] = useState(500)
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!query.trim()) {
-      onError('Please enter a question')
-      return
-    }
+    if (!repoPath.trim()) return
 
+    setIsSubmitting(true)
     onLoading(true)
     onError(null)
-    onResults(null)
-    onQuerySubmitted?.(query)
 
     try {
-      const data = await analyzeQuery({
-        repo_path: repoPath,
-        query: query,
-        chat_session_id: chatSessionId ?? undefined,
-        top_k: topK,
-        max_commits: maxCommits,
-      })
+      const data = await linkRepository({ url: repoPath })
+      toast.success(`Successfully linked ${data.owner}/${data.name}!`)
+      // Pass the repo data securely up to the UI layout
       onResults(data)
     } catch (err: any) {
-      onError(err.message || 'Failed to analyze repository')
+      const errorMsg = err.response?.data?.detail || 'Failed to link repository'
+      onError(errorMsg)
+      toast.error(errorMsg)
     } finally {
+      setIsSubmitting(false)
       onLoading(false)
     }
   }
@@ -52,78 +44,39 @@ export default function SearchInterface({ onResults, onLoading, onError, onQuery
         <span className="terminal-dot terminal-dot-danger" />
         <span className="terminal-dot terminal-dot-warning" />
         <span className="terminal-dot terminal-dot-success" />
-        <span className="ml-2 text-xs font-mono text-[hsl(var(--muted-foreground))]">command-bar.tsx</span>
+        <span className="ml-2 text-xs font-mono text-[hsl(var(--muted-foreground))]">repository-linker.tsx</span>
       </div>
 
-      <form onSubmit={handleSubmit} className="mt-4 space-y-5">
+      <div className="mt-4 pb-3">
+        <h2 className="text-xl font-bold text-[hsl(var(--foreground))]">Link a GitHub Repository</h2>
+        <p className="mt-1 text-sm text-[hsl(var(--muted-foreground))]">
+          Submit any public GitHub URL to automatically trace, synchronize, and index its code evolution dynamically into our SQL storage!
+        </p>
+      </div>
+
+      <form onSubmit={handleSubmit} className="space-y-5">
         <div>
           <label className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-[hsl(var(--muted-foreground))]">
             <Database className="h-3.5 w-3.5" />
-            GitHub Repository URL
+            GitHub URL
           </label>
           <input
             type="text"
             value={repoPath}
             onChange={(e) => setRepoPath(e.target.value)}
             className="electric-ring h-11 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--surface-0)/0.8)] px-3 text-sm text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))]"
-            placeholder="https://github.com/owner/repo"
+            placeholder="https://github.com/isocpp/CppCoreGuidelines"
           />
-        </div>
-
-        <div>
-          <label className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-[hsl(var(--muted-foreground))]">
-            <ScanSearch className="h-3.5 w-3.5" />
-            Your Question
-          </label>
-          <textarea
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            rows={4}
-            className="electric-ring w-full resize-none rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--surface-0)/0.8)] px-3 py-2 text-sm leading-6 text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))]"
-            placeholder="Why was authentication changed? What caused the performance improvement?"
-          />
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div>
-            <label className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-[hsl(var(--muted-foreground))]">
-              <Sparkles className="h-3.5 w-3.5" />
-              Top Results
-            </label>
-            <input
-              type="number"
-              value={topK}
-              onChange={(e) => setTopK(parseInt(e.target.value))}
-              min={1}
-              max={20}
-              className="electric-ring h-11 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--surface-0)/0.8)] px-3 text-sm text-[hsl(var(--foreground))]"
-            />
-          </div>
-
-          <div>
-            <label className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-[hsl(var(--muted-foreground))]">
-              <SlidersHorizontal className="h-3.5 w-3.5" />
-              Max Commits <span className="ml-1 font-mono text-[hsl(var(--primary))]">{maxCommits}</span>
-            </label>
-            <input
-              type="range"
-              value={maxCommits}
-              onChange={(e) => setMaxCommits(parseInt(e.target.value))}
-              min={50}
-              max={5000}
-              step={50}
-              className="mt-3 h-2 w-full cursor-pointer appearance-none rounded-lg bg-[hsl(var(--surface-3))] accent-[hsl(var(--primary))]"
-            />
-          </div>
         </div>
 
         <button
           type="submit"
-          className="glow-electric electric-ring w-full rounded-lg border border-[hsl(var(--primary)/0.5)] bg-[hsl(var(--primary))] px-4 py-3 text-sm font-semibold text-[hsl(var(--surface-0))] transition duration-200 hover:-translate-y-[1px] hover:bg-[hsl(var(--primary-glow))]"
+          disabled={isSubmitting}
+          className="glow-electric electric-ring w-full rounded-lg border border-[hsl(var(--primary)/0.5)] bg-[hsl(var(--primary))] px-4 py-3 text-sm font-semibold text-[hsl(var(--surface-0))] transition duration-200 hover:-translate-y-[1px] hover:bg-[hsl(var(--primary-glow))] disabled:opacity-50 disabled:hover:translate-y-0"
         >
           <span className="inline-flex items-center gap-2">
-            <Play className="h-4 w-4" />
-            Excavate Commit History
+            {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link className="h-4 w-4" />}
+            {isSubmitting ? 'Syncing...' : 'Link Repository'}
           </span>
         </button>
       </form>

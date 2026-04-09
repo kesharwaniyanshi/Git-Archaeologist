@@ -245,3 +245,82 @@ def fetch_repo_commits_with_diffs(
             time.sleep(0.1)
 
     return details
+
+def ingest_repository_task(repo_id: str):
+    """
+    Background worker invoked from FastAPI BackgroundTasks.
+    Clones/updates the repository strictly using PyDriller, parses block diffs natively, 
+    and inserts them directly into SQLAlchemy without choking the main thread.
+    """
+    from db.session import SessionLocal
+    import structlog
+    from pydriller import Repository as DrillerRepository
+    from db.models import Repository, Commit, FileDiff
+
+    logger = structlog.get_logger()
+    db = SessionLocal()
+    try:
+        repo = db.query(Repository).filter(Repository.id == repo_id).first()
+        if not repo:
+            logger.error("repo_not_found", repo_id=repo_id)
+            return
+            
+        kwargs = {"path_to_repo": repo.url}
+        if repo.last_indexed_commit:
+            # Exclusively resume naturally traversing sequential deltas!
+            kwargs["from_commit"] = repo.last_indexed_commit
+            
+        driller = DrillerRepository(**kwargs)
+        
+        last_hash = repo.last_indexed_commit
+        count = 0
+        
+        logger.info("bg_ingestion_started", repo=repo.url, resume_from=repo.last_indexed_commit)
+        
+        for commit in driller.traverse_commits():
+            # Skip the exact hash boundary to entirely prevent isolated duplications pivot to pivot
+            if commit.hash == repo.last_indexed_commit:
+                continue
+                
+            db_commit = Commit(
+                repository_id=repo.id,
+                hash=commit.hash,
+                author_name=commit.author.name,
+                author_email=commit.author.email,
+                message=commit.msg[:2000] if commit.msg else "", 
+                timestamp=commit.committer_date,
+            )
+            db.add(db_commit)
+            db.flush() 
+            
+            for mod in commit.modified_files:
+                diff_text = mod.diff_parsed if hasattr(mod, 'diff_parsed') else mod.diff
+                diff_str = str(diff_text) if diff_text else ""
+                    
+                db_diff = FileDiff(
+                    commit_id=db_commit.id,
+                    file_path=mod.new_path or mod.old_path or "unknown",
+                    status=mod.change_type.name if hasattr(mod.change_type, 'name') else str(mod.change_type),
+                    diff_content=diff_str[:15000] # Limiting payload sizing slightly for safety per file!
+                )
+                db.add(db_diff)
+                
+            last_hash = commit.hash
+            count += 1
+            if count >= 300: # Soft threshold so we uniquely sync micro transactions
+                logger.info("bg_ingestion_chunk_sync", count=count, last_hash=last_hash)
+                repo.last_indexed_commit = last_hash
+                db.commit()
+                count = 0
+                
+        if count > 0:
+            repo.last_indexed_commit = last_hash
+            db.commit()
+            
+        logger.info("bg_ingestion_completed", repo=repo.url, final_hash=last_hash)
+            
+    except Exception as e:
+        logger.error("pydriller_ingestion_error", error=str(e), repo_id=repo_id)
+        db.rollback()
+    finally:
+        db.close()

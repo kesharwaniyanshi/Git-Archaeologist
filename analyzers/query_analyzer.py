@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import json
 import os
+import re
 
 from core.embeddings import EmbeddingEngine, build_commit_semantic_text, rank_commits_by_semantic
 from core.github_fetcher import is_github_repo_url
@@ -152,6 +153,7 @@ class QueryDrivenAnalyzer:
         return [commit for _, commit in combined[:analyze_candidates]]
 
     def answer_question(self, query: str, top_k: int = 5, analyze_candidates: int = 20) -> List[Dict]:
+        """Retrieve top candidate commits with their diffs. No per-commit LLM calls."""
         if not self.commits_index:
             raise ValueError("Repository not indexed. Call index_repository() first.")
 
@@ -161,6 +163,7 @@ class QueryDrivenAnalyzer:
 
         candidate_hashes = [commit["hash"] for commit in candidates]
 
+        # Load any previously cached summaries (optional enrichment, not required)
         if self.summary_store and candidate_hashes:
             try:
                 persisted = self.summary_store.get_summaries_for_hashes(candidate_hashes)
@@ -169,33 +172,105 @@ class QueryDrivenAnalyzer:
             except Exception as exc:
                 print(f"Failed loading persisted summaries from PostgreSQL: {exc}")
 
+        # Fetch raw diffs for candidates — this is the critical evidence source
         commits_with_diffs = fetch_diffs_for_commits(self.repo_path, candidate_hashes)
         commits_by_hash = {commit["hash"]: commit for commit in commits_with_diffs}
 
         analyzed = []
-        for index, commit_meta in enumerate(candidates[:analyze_candidates], 1):
+        for commit_meta in candidates[:top_k]:
             commit_hash = commit_meta["hash"]
+            commit_data = commits_by_hash.get(commit_hash, {})
 
-            if commit_hash in self.summary_cache:
-                analyzed.append(self.summary_cache[commit_hash])
-                continue
+            # Use cached summary if available; otherwise use commit message as-is
+            cached = self.summary_cache.get(commit_hash)
+            summary_text = cached.get("summary", "") if cached else commit_meta.get("message", "")
 
-            if commit_hash not in commits_by_hash:
-                continue
+            # Build diff snippets from ALL changed files using an adaptive budget
+            diff_snippet = ""
+            file_list = []
+            files_changed = commit_data.get("files_changed", [])
+            COMMIT_BUDGET = 6000  # characters per commit — fits ~5 commits in Groq context
+            budget_remaining = COMMIT_BUDGET
 
-            commit_data = commits_by_hash[commit_hash]
-            print(f"[{index}/{len(candidates)}] Summarizing {commit_hash[:8]} - {commit_data['message'][:60]}")
-            summary = self.summarizer.summarize_commit(commit_data)
-            self.summary_cache[commit_hash] = summary
-            if self.summary_store:
-                try:
-                    self.summary_store.upsert_summary(summary)
-                except Exception as exc:
-                    print(f"Failed persisting commit summary to PostgreSQL: {exc}")
-            analyzed.append(summary)
+            # Sort files: query-relevant filenames first, then by change size (desc)
+            q_tokens = set(re.findall(r'[a-zA-Z0-9_]+', query.lower()))
 
-        successful = [item for item in analyzed if item.get("status") == "success"]
-        return successful[:top_k]
+            def _file_priority(fc):
+                fname = (fc.get("filename") or "").lower()
+                fname_tokens = set(re.findall(r'[a-zA-Z0-9_]+', fname))
+                relevance = len(q_tokens & fname_tokens)
+                size = fc.get("additions", 0) + fc.get("deletions", 0)
+                return (-relevance, -size)  # higher relevance & bigger changes first
+
+            sorted_files = sorted(files_changed, key=_file_priority)
+
+            compact_summaries = []  # for files that exceed the budget
+            for fc in sorted_files:
+                fname = fc.get("filename", "unknown")
+                file_list.append(fname)
+                raw_diff = fc.get("diff", "")
+                additions = fc.get("additions", 0)
+                deletions = fc.get("deletions", 0)
+                change_type = fc.get("change_type", "MODIFIED")
+
+                if not raw_diff or budget_remaining <= 0:
+                    # No diff data or budget exhausted — add compact summary
+                    compact_summaries.append(
+                        f"  {fname} ({change_type}) +{additions} -{deletions}"
+                    )
+                    continue
+
+                # Intelligent filtering: keep only meaningful diff lines
+                meaningful = []
+                for line in raw_diff.split("\n"):
+                    stripped = line.strip()
+                    if not stripped or stripped in ("+", "-"):
+                        continue
+                    bare = stripped.lstrip("+-").strip()
+                    if bare.startswith(("import ", "from ", "require(", "#include")):
+                        continue
+                    if bare.startswith(("//", "#", "/*", "*", "*/", "<!--")):
+                        continue
+                    if bare in ("{", "}", "(", ")", "};", ");", "],", "})", "});"):
+                        continue
+                    meaningful.append(line)
+
+                if not meaningful:
+                    compact_summaries.append(
+                        f"  {fname} ({change_type}) +{additions} -{deletions} [imports/config only]"
+                    )
+                    continue
+
+                # Fill as many meaningful lines as the budget allows
+                file_block = f"\n--- {fname} ({change_type}) ---\n"
+                lines_used = 0
+                for line in meaningful:
+                    if budget_remaining - len(line) - 1 <= 0:
+                        break
+                    file_block += line + "\n"
+                    budget_remaining -= len(line) + 1
+                    lines_used += 1
+
+                if lines_used < len(meaningful):
+                    file_block += f"... ({len(meaningful) - lines_used} more meaningful lines)\n"
+
+                diff_snippet += file_block
+
+            # Append compact summaries for files that didn't get full diffs
+            if compact_summaries:
+                diff_snippet += "\nOther files in this commit:\n" + "\n".join(compact_summaries) + "\n"
+
+            analyzed.append({
+                "hash": commit_hash,
+                "message": commit_meta.get("message", ""),
+                "summary": summary_text,
+                "status": "success",
+                "error": None,
+                "diff_snippet": diff_snippet[:8000],  # Safety cap
+                "files_changed": file_list,
+            })
+
+        return analyzed
 
     def save_index(self, output_file: str) -> None:
         save_commits_metadata(self.commits_index, output_file)
