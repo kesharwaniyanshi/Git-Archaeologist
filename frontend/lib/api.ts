@@ -10,12 +10,21 @@ const apiClient = axios.create({
   },
 })
 
+if (typeof window !== 'undefined') {
+  apiClient.interceptors.request.use((config) => {
+    const token = localStorage.getItem('gitarch_token')
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`
+    }
+    return config
+  })
+}
+
 export type AuthUser = {
+  id?: string
   github_id?: string
-  login?: string
+  google_id?: string
   email?: string | null
-  name?: string | null
-  avatar_url?: string | null
 }
 
 export type AuthStatusResponse = {
@@ -46,6 +55,14 @@ export interface IndexRequest {
   use_embeddings?: boolean
 }
 
+export interface ChatSessionListItem {
+  chat_session_id: string
+  created_at?: string | null
+  updated_at?: string | null
+  last_user_query: string
+  message_count: number
+}
+
 export async function healthCheck() {
   const response = await apiClient.get('/health')
   return response.data
@@ -73,16 +90,42 @@ export async function getChatHistory(chatSessionId: string) {
   return response.data
 }
 
+export async function listChatSessions(repoPath?: string, limit: number = 50) {
+  const response = await apiClient.get('/chat', {
+    params: {
+      repo_path: repoPath,
+      limit,
+    },
+  })
+  return response.data
+}
+
+export async function createChatSession(repoPath?: string) {
+  const response = await apiClient.post('/chat/session', {
+    repo_path: repoPath,
+  })
+  return response.data
+}
+
 export function getGitHubLoginUrl() {
   return `${API_BASE_URL}/auth/github/login`
 }
 
-export async function getAuthMe(): Promise<AuthStatusResponse> {
-  const response = await apiClient.get('/auth/me')
-  return response.data
-}
-
-export async function logoutAuth() {
-  const response = await apiClient.post('/auth/logout')
-  return response.data
+export const authApi = {
+  login: async (email: string, password: string) => {
+    const response = await apiClient.post('/auth/login', { email, password })
+    return response.data
+  },
+  register: async (email: string, password: string) => {
+    const response = await apiClient.post('/auth/register', { email, password })
+    return response.data
+  },
+  getMe: async (): Promise<AuthStatusResponse> => {
+    const response = await apiClient.get('/auth/me')
+    return response.data
+  },
+  logout: async () => {
+    const response = await apiClient.post('/auth/logout')
+    return response.data
+  }
 }

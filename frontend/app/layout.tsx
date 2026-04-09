@@ -1,6 +1,8 @@
 import type { Metadata } from 'next'
 import { IBM_Plex_Mono, Space_Grotesk } from 'next/font/google'
 import './globals.css'
+import { AuthProvider } from '@/lib/auth'
+import { Toaster } from 'sonner'
 
 const spaceGrotesk = Space_Grotesk({
   subsets: ['latin'],
@@ -25,7 +27,12 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className={`${spaceGrotesk.variable} ${ibmPlexMono.variable}`}>{children}</body>
+      <body className={`${spaceGrotesk.variable} ${ibmPlexMono.variable}`}>
+        <AuthProvider>
+          {children}
+        </AuthProvider>
+        <Toaster theme="dark" position="top-right" richColors />
+      </body>
     </html>
   )
 }

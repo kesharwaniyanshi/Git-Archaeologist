@@ -155,3 +155,53 @@ class PostgresChatStore:
                 }
             )
         return messages
+
+    def list_sessions(self, repo_path: Optional[str] = None, limit: int = 50) -> List[Dict]:
+        repository_id = self._get_repository_id(repo_path) if repo_path else None
+
+        base_query = """
+            SELECT
+                s.id,
+                s.created_at,
+                s.updated_at,
+                COALESCE((
+                    SELECT m.content
+                    FROM chat_messages m
+                    WHERE m.chat_session_id = s.id AND m.role = 'user'
+                    ORDER BY m.created_at DESC
+                    LIMIT 1
+                ), '') AS last_user_query,
+                COALESCE((
+                    SELECT COUNT(*)::BIGINT
+                    FROM chat_messages m
+                    WHERE m.chat_session_id = s.id
+                ), 0) AS message_count
+            FROM chat_sessions s
+            {where_clause}
+            ORDER BY s.updated_at DESC
+            LIMIT :limit
+        """
+
+        where_clause = ""
+        params: Dict = {"limit": limit}
+        if repository_id is not None:
+            where_clause = "WHERE s.repository_id = :repository_id"
+            params["repository_id"] = repository_id
+
+        query = text(base_query.format(where_clause=where_clause))
+
+        with self.engine.begin() as connection:
+            rows = connection.execute(query, params).fetchall()
+
+        sessions: List[Dict] = []
+        for row in rows:
+            sessions.append(
+                {
+                    "chat_session_id": row[0],
+                    "created_at": row[1].isoformat() if row[1] is not None else None,
+                    "updated_at": row[2].isoformat() if row[2] is not None else None,
+                    "last_user_query": row[3] or "",
+                    "message_count": int(row[4] or 0),
+                }
+            )
+        return sessions

@@ -12,12 +12,74 @@ import re
 from dotenv import load_dotenv
 from pydriller import Repository
 
+from core.github_fetcher import (
+    get_commit_detail,
+    is_github_repo_url,
+    list_repo_commits,
+    parse_github_repo_url,
+    transform_github_commit_detail,
+)
+
 # Ensure GROQ_API_KEY and other env vars are available for analyzer initialization.
 load_dotenv()
 
 
+# In-memory cache for GitHub commit details keyed by "owner/repo" -> sha -> payload.
+_GITHUB_COMMIT_CACHE: Dict[str, Dict[str, Dict]] = {}
+
+
+def _github_cache_key(repo_url: str) -> str:
+    owner, repo = parse_github_repo_url(repo_url)
+    return f"{owner}/{repo}"
+
+
+def _parse_commit_datetime(value: str) -> datetime:
+    """Parse commit datetime values from both PyDriller and GitHub API payloads."""
+    raw = (value or "").strip()
+    if not raw:
+        return datetime.fromtimestamp(0)
+
+    # GitHub API timestamps are usually RFC3339 with a trailing Z.
+    # Python 3.9 datetime.fromisoformat does not accept plain Z suffix.
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        # Keep retrieval robust even if a timestamp is malformed.
+        return datetime.fromtimestamp(0)
+
+
 def ingest_light(repo_path: str, max_commits: int = 1000) -> List[Dict]:
     """Extract commit metadata without loading full diffs."""
+    if is_github_repo_url(repo_path):
+        owner, repo = parse_github_repo_url(repo_path)
+        commits = list_repo_commits(owner, repo, per_page=max_commits)
+
+        # Keep indexing lightweight: defer expensive per-commit diff fetches
+        # to fetch_diffs_for_commits() for only top-ranked candidates.
+        parsed: List[Dict] = []
+        for item in commits[:max_commits]:
+            commit_block = item.get("commit") or {}
+            author_block = commit_block.get("author") or {}
+            sha = item.get("sha") or ""
+            if not sha:
+                continue
+
+            parsed.append(
+                {
+                    "hash": sha,
+                    "short_hash": sha[:8],
+                    "message": commit_block.get("message", ""),
+                    "author": author_block.get("name") or "Unknown",
+                    "date": author_block.get("date") or "",
+                    "files": [],
+                }
+            )
+
+        return parsed
+
     commits: List[Dict] = []
     repo = Repository(repo_path)
 
@@ -53,7 +115,7 @@ def candidate_commit_scores(query: str, commits: List[Dict]) -> Dict[str, float]
     if not commits:
         return {}
 
-    dates = [datetime.fromisoformat(c["date"]) for c in commits]
+    dates = [_parse_commit_datetime(c.get("date", "")) for c in commits]
     max_ts = max(dates).timestamp()
     min_ts = min(dates).timestamp()
     ts_range = max_ts - min_ts if max_ts != min_ts else 1.0
@@ -70,7 +132,7 @@ def candidate_commit_scores(query: str, commits: List[Dict]) -> Dict[str, float]
                 filename_score = 1.0
                 break
 
-        commit_ts = datetime.fromisoformat(commit["date"]).timestamp()
+        commit_ts = _parse_commit_datetime(commit.get("date", "")).timestamp()
         recency = (commit_ts - min_ts) / ts_range
         scores[commit["hash"]] = 0.6 * msg_score + 0.3 * filename_score + 0.1 * recency
 
@@ -90,6 +152,26 @@ def candidate_commits(query: str, commits: List[Dict], top_n: int = 20) -> List[
 
 def fetch_diffs_for_commits(repo_path: str, commit_hashes: List[str]) -> List[Dict]:
     """Fetch full diff payloads for selected commits only."""
+    if is_github_repo_url(repo_path):
+        owner, repo = parse_github_repo_url(repo_path)
+        cache_key = _github_cache_key(repo_path)
+        _GITHUB_COMMIT_CACHE.setdefault(cache_key, {})
+
+        found: List[Dict] = []
+        for sha in commit_hashes:
+            cached = _GITHUB_COMMIT_CACHE[cache_key].get(sha)
+            if cached:
+                found.append(cached)
+                continue
+
+            detail = get_commit_detail(owner, repo, sha)
+            transformed = transform_github_commit_detail(detail)
+            _GITHUB_COMMIT_CACHE[cache_key][sha] = transformed
+            found.append(transformed)
+
+        by_hash = {item["hash"]: item for item in found}
+        return [by_hash[h] for h in commit_hashes if h in by_hash]
+
     repo = Repository(repo_path)
     found: List[Dict] = []
     remaining = set(commit_hashes)

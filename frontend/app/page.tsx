@@ -5,7 +5,13 @@ import SearchInterface from '@/components/SearchInterface'
 import ResultsView from '@/components/ResultsView'
 import Header from '@/components/Header'
 import ScanHistory from '@/components/ScanHistory'
-import { getAuthMe, getGitHubLoginUrl, logoutAuth, type AuthUser } from '@/lib/api'
+import AuthModal from '@/components/auth/AuthModal'
+import {
+  createChatSession,
+  getChatHistory,
+  listChatSessions,
+} from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 
 type ScanRecord = {
   id: string
@@ -23,51 +29,111 @@ export default function Home() {
   const [lastQuery, setLastQuery] = useState('')
   const [scans, setScans] = useState<ScanRecord[]>([])
   const [chatSessionId, setChatSessionId] = useState<string | null>(null)
-  const [authUser, setAuthUser] = useState<AuthUser | null>(null)
-  const [authLoading, setAuthLoading] = useState(true)
+  const [activeScanId, setActiveScanId] = useState<string | null>(null)
+  const [authModalOpen, setAuthModalOpen] = useState(false)
+
+  const { user: authUser, loading: authLoading, logout } = useAuth()
+
+  const loadSessions = async () => {
+    try {
+      const data = await listChatSessions(undefined, 50)
+      const mapped: ScanRecord[] = (data.sessions || []).map((session: any) => ({
+        id: session.chat_session_id,
+        query: session.last_user_query || 'New chat session',
+        createdAt: session.updated_at || session.created_at || new Date().toISOString(),
+        resultsCount: Math.max(0, Math.floor((session.message_count || 0) / 2)),
+      }))
+      setScans(mapped)
+    } catch {
+      // Keep local experience functional even if chat listing fails.
+    }
+  }
 
   useEffect(() => {
-    const loadAuth = async () => {
-      try {
-        const auth = await getAuthMe()
-        setAuthUser(auth.authenticated ? auth.user : null)
-      } catch {
-        setAuthUser(null)
-      } finally {
-        setAuthLoading(false)
-      }
-    }
-
-    loadAuth()
+    loadSessions()
   }, [])
 
   const handleLogin = () => {
-    window.location.href = getGitHubLoginUrl()
+    setAuthModalOpen(true)
   }
 
   const handleLogout = async () => {
-    try {
-      await logoutAuth()
-    } finally {
-      setAuthUser(null)
-    }
+    logout()
   }
 
   const handleResults = (data: any) => {
     setResults(data)
     if (data?.chat_session_id) {
       setChatSessionId(data.chat_session_id)
+      setActiveScanId(data.chat_session_id)
     }
     if (!lastQuery || !data) return
 
     const record: ScanRecord = {
-      id: `${Date.now()}`,
+      id: data?.chat_session_id || `${Date.now()}`,
       query: lastQuery,
       createdAt: new Date().toISOString(),
       confidence: data.confidence,
       resultsCount: data.results?.length ?? 0,
     }
-    setScans((prev) => [record, ...prev].slice(0, 10))
+    setScans((prev) => {
+      const withoutCurrent = prev.filter((item) => item.id !== record.id)
+      return [record, ...withoutCurrent].slice(0, 50)
+    })
+  }
+
+  const handleSelectScan = async (scanId: string) => {
+    setActiveScanId(scanId)
+    setChatSessionId(scanId)
+    setError(null)
+    setLoading(true)
+    try {
+      const history = await getChatHistory(scanId)
+      const messages: any[] = history?.messages || []
+      const lastUser = [...messages].reverse().find((msg) => msg.role === 'user')
+      const lastAssistant = [...messages].reverse().find((msg) => msg.role === 'assistant')
+
+      if (lastUser?.content) {
+        setLastQuery(lastUser.content)
+      }
+
+      setResults({
+        query: lastUser?.content || '',
+        answer: lastAssistant?.content || 'No assistant response in this chat yet.',
+        evidence_count: lastAssistant?.metadata?.evidence_count || 0,
+        chat_session_id: scanId,
+      })
+    } catch (err: any) {
+      setError(err?.message || 'Failed to load chat history')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleNewChat = async () => {
+    setError(null)
+    setResults(null)
+    setLastQuery('')
+    try {
+      const created = await createChatSession()
+      const newId = created?.chat_session_id
+      if (!newId) {
+        return
+      }
+      setChatSessionId(newId)
+      setActiveScanId(newId)
+      setScans((prev) => [
+        {
+          id: newId,
+          query: 'New chat session',
+          createdAt: new Date().toISOString(),
+          resultsCount: 0,
+        },
+        ...prev,
+      ])
+    } catch (err: any) {
+      setError(err?.message || 'Failed to create new chat session')
+    }
   }
 
   return (
@@ -83,7 +149,12 @@ export default function Home() {
       <section className="mx-auto flex w-full max-w-[1500px] gap-0 px-3 pb-8 pt-4 sm:px-5 lg:px-8">
         {sidebarOpen && (
           <aside className="fade-up hidden w-[320px] shrink-0 border-r border-[hsl(var(--border))] pr-4 lg:block">
-            <ScanHistory scans={scans} />
+            <ScanHistory
+              scans={scans}
+              activeScanId={activeScanId}
+              onSelectScan={handleSelectScan}
+              onNewChat={handleNewChat}
+            />
           </aside>
         )}
 
@@ -120,6 +191,8 @@ export default function Home() {
           {results && !loading && <ResultsView results={results} />}
         </div>
       </section>
+
+      <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} />
     </main>
   )
 }

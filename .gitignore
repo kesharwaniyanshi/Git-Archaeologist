@@ -39,3 +39,5 @@ wheels/
 *.csv
 *.log
 .git_arch_sessions*
+*.db
+*.sqlite3

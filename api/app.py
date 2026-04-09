@@ -1,34 +1,34 @@
 """
 FastAPI service for Git Archaeologist.
-
-Endpoints:
-- GET /health
-- GET /status
-- POST /index
-- POST /analyze
 """
-
 from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Dict, List, Optional
 import os
-import importlib
-from urllib.parse import urlparse
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
-
-from analyzers.query_analyzer import QueryDrivenAnalyzer
-from pipelines.rag_pipeline import RAGPipeline
+import structlog
 
 # Load local .env so OAuth and DB settings work without shell export.
 load_dotenv()
 
+# Set up structured logging using JSON
+structlog.configure(
+    processors=[
+        structlog.stdlib.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.JSONRenderer(),
+    ]
+)
+logger = structlog.get_logger()
+
+from api.routes import auth, chat, repos
+from core.services.registry import get_registry
+
+from db.session import engine, Base
+import db.models
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="Git Archaeologist API",
@@ -36,7 +36,6 @@ app = FastAPI(
     description="Query-driven Git history analysis with retrieval + synthesized answers.",
 )
 
-# Configure CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -48,7 +47,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Cookie-backed session storage for OAuth login state.
 app.add_middleware(
     SessionMiddleware,
     secret_key=os.getenv("APP_SESSION_SECRET", "dev-insecure-change-me"),
@@ -56,426 +54,16 @@ app.add_middleware(
     https_only=False,
 )
 
-
-@dataclass
-class AnalyzerHandle:
-    key: str
-    analyzer: QueryDrivenAnalyzer
-
-
-class IndexRequest(BaseModel):
-    repo_path: str = Field(..., description="Local path to git repository")
-    session_dir: Optional[str] = Field(default=None, description="Session directory for persistence")
-    max_commits: int = Field(default=500, ge=1, le=20000)
-    use_embeddings: bool = True
-    embedding_model: str = "all-MiniLM-L6-v2"
-    force_reindex: bool = False
-
-
-class AnalyzeRequest(BaseModel):
-    repo_path: str = Field(..., description="Local path to git repository")
-    query: str = Field(..., min_length=3)
-    chat_session_id: Optional[str] = Field(default=None, description="Existing chat session identifier")
-    session_dir: Optional[str] = Field(default=None, description="Session directory for persistence")
-    max_commits: int = Field(default=500, ge=1, le=20000)
-    top_k: int = Field(default=5, ge=1, le=50)
-    analyze_candidates: int = Field(default=20, ge=1, le=200)
-    use_embeddings: bool = True
-    embedding_model: str = "all-MiniLM-L6-v2"
-    boost_freshness: bool = True
-    show_evidence: bool = False
-
-
-class AnalyzeResponse(BaseModel):
-    query: str
-    answer: str
-    chat_session_id: Optional[str] = None
-    evidence_count: int
-    evidence: Optional[List[Dict]] = None
-
-
-class ChatSessionCreateRequest(BaseModel):
-    repo_path: Optional[str] = Field(default=None, description="Local path to git repository")
-
-
-class ChatSessionCreateResponse(BaseModel):
-    chat_session_id: str
-
-
-class ChatHistoryResponse(BaseModel):
-    chat_session_id: str
-    messages: List[Dict]
-
-
-class AuthStatusResponse(BaseModel):
-    authenticated: bool
-    user: Optional[Dict] = None
-
-
-class AnalyzerRegistry:
-    def __init__(self):
-        self._handles: Dict[str, AnalyzerHandle] = {}
-
-    @staticmethod
-    def _key(repo_path: str, session_dir: Optional[str], embedding_model: str, use_embeddings: bool) -> str:
-        return "|".join([
-            repo_path,
-            session_dir or ".git_arch_sessions/default",
-            embedding_model,
-            str(use_embeddings),
-        ])
-
-    def get_or_create(
-        self,
-        repo_path: str,
-        session_dir: Optional[str],
-        use_embeddings: bool,
-        embedding_model: str,
-    ) -> QueryDrivenAnalyzer:
-        key = self._key(repo_path, session_dir, embedding_model, use_embeddings)
-
-        if key in self._handles:
-            return self._handles[key].analyzer
-
-        analyzer = QueryDrivenAnalyzer(
-            repo_path=repo_path,
-            use_embeddings=use_embeddings,
-            embedding_model=embedding_model,
-            session_dir=session_dir,
-        )
-        self._handles[key] = AnalyzerHandle(key=key, analyzer=analyzer)
-        return analyzer
-
-    def status(self) -> Dict:
-        sessions = []
-        for key, handle in self._handles.items():
-            sessions.append(
-                {
-                    "key": key,
-                    "repo_path": handle.analyzer.repo_path,
-                    "session_dir": str(handle.analyzer.session_dir),
-                    "indexed_commits": len(handle.analyzer.commits_index),
-                    "cached_summaries": len(handle.analyzer.summary_cache),
-                    "embeddings_enabled": handle.analyzer.use_embeddings,
-                }
-            )
-        return {"active_sessions": len(sessions), "sessions": sessions}
-
-
-registry = AnalyzerRegistry()
-
-
-def _create_chat_store():
-    # Keep chat persistence optional to avoid breaking local-only setups.
-    if not os.getenv("DATABASE_URL"):
-        return None
-    try:
-        from core.chat_store_pg import PostgresChatStore
-
-        return PostgresChatStore()
-    except Exception as exc:
-        print(f"Chat store disabled: {exc}")
-        return None
-
-
-chat_store = _create_chat_store()
-
-
-def _create_auth_store():
-    if not os.getenv("DATABASE_URL"):
-        return None
-    try:
-        from core.auth_store_pg import PostgresAuthStore
-
-        return PostgresAuthStore()
-    except Exception as exc:
-        print(f"Auth store disabled: {exc}")
-        return None
-
-
-auth_store = _create_auth_store()
-
-
-def _create_oauth_client():
-    client_id = os.getenv("GITHUB_CLIENT_ID")
-    client_secret = os.getenv("GITHUB_CLIENT_SECRET")
-    if not client_id or not client_secret:
-        return None
-
-    try:
-        module = importlib.import_module("authlib.integrations.starlette_client")
-        OAuth = getattr(module, "OAuth")
-    except Exception as exc:
-        print(f"OAuth client disabled: {exc}")
-        return None
-
-    oauth = OAuth()
-    oauth.register(
-        name="github",
-        client_id=client_id,
-        client_secret=client_secret,
-        authorize_url="https://github.com/login/oauth/authorize",
-        access_token_url="https://github.com/login/oauth/access_token",
-        api_base_url="https://api.github.com/",
-        client_kwargs={"scope": "read:user user:email"},
-    )
-    return oauth
-
-
-oauth_client = _create_oauth_client()
-
-
-def _get_oauth_client():
-    global oauth_client
-    if oauth_client:
-        return oauth_client
-
-    oauth_client = _create_oauth_client()
-    return oauth_client
-
-
-def _missing_oauth_config() -> List[str]:
-    missing = []
-    for key in ["GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET", "APP_SESSION_SECRET", "FRONTEND_URL"]:
-        if not os.getenv(key):
-            missing.append(key)
-    return missing
-
-
-def _resolve_oauth_redirect_uri(request: Request) -> str:
-    inferred = str(request.url_for("auth_github_callback"))
-    configured = os.getenv("GITHUB_OAUTH_REDIRECT_URI")
-    if not configured:
-        return inferred
-
-    configured_host = (urlparse(configured).hostname or "").lower()
-    request_host = (request.url.hostname or "").lower()
-    local_hosts = {"localhost", "127.0.0.1"}
-
-    # For local dev, keep login and callback on the same host to preserve session state cookie.
-    if configured_host in local_hosts and request_host in local_hosts and configured_host != request_host:
-        return inferred
-
-    return configured
-
-
-def _ensure_index(analyzer: QueryDrivenAnalyzer, max_commits: int, force_reindex: bool = False) -> Dict:
-    if force_reindex:
-        stats = analyzer.index_repository(max_commits=max_commits)
-        analyzer.save_session()
-        return stats
-
-    # Try loading persisted session first.
-    loaded = analyzer.load_session()
-    if loaded and analyzer.commits_index:
-        return {
-            "total_commits": len(analyzer.commits_index),
-            "loaded_from_session": True,
-            "cached_summaries": len(analyzer.summary_cache),
-        }
-
-    stats = analyzer.index_repository(max_commits=max_commits)
-    analyzer.save_session()
-    return stats
-
-
+# Include separated routers
+app.include_router(auth.router)
+app.include_router(chat.router)
+app.include_router(repos.router)
+w
 @app.get("/health")
-def health() -> Dict[str, str]:
+def health() -> dict:
     return {"status": "ok"}
 
-
 @app.get("/status")
-def status() -> Dict:
+def status() -> dict:
+    registry = get_registry()
     return registry.status()
-
-
-@app.get("/auth/github/login")
-async def auth_github_login(request: Request):
-    oauth = _get_oauth_client()
-    if not oauth:
-        missing = _missing_oauth_config()
-        detail = "GitHub OAuth is not configured"
-        if missing:
-            detail = f"GitHub OAuth is not configured. Missing env vars: {', '.join(missing)}"
-        raise HTTPException(status_code=503, detail=detail)
-
-    redirect_uri = _resolve_oauth_redirect_uri(request)
-    return await oauth.github.authorize_redirect(request, redirect_uri)
-
-
-@app.get("/auth/github/callback")
-async def auth_github_callback(request: Request):
-    oauth = _get_oauth_client()
-    if not oauth:
-        missing = _missing_oauth_config()
-        detail = "GitHub OAuth is not configured"
-        if missing:
-            detail = f"GitHub OAuth is not configured. Missing env vars: {', '.join(missing)}"
-        raise HTTPException(status_code=503, detail=detail)
-
-    token = await oauth.github.authorize_access_token(request)
-    profile_resp = await oauth.github.get("user", token=token)
-    profile = profile_resp.json()
-
-    # GitHub may omit public email from /user; fetch primary email when available.
-    if not profile.get("email"):
-        emails_resp = await oauth.github.get("user/emails", token=token)
-        emails = emails_resp.json()
-        if isinstance(emails, list):
-            primary = next((entry for entry in emails if entry.get("primary")), None)
-            if primary and primary.get("email"):
-                profile["email"] = primary["email"]
-
-    user_data = {
-        "github_id": str(profile.get("id", "")),
-        "login": profile.get("login"),
-        "email": profile.get("email"),
-        "name": profile.get("name"),
-        "avatar_url": profile.get("avatar_url"),
-    }
-
-    persisted_user = user_data
-    if auth_store:
-        try:
-            persisted_user = auth_store.upsert_user(profile)
-        except Exception as exc:
-            print(f"Failed to persist OAuth user: {exc}")
-
-    request.session["user"] = persisted_user
-
-    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
-    return RedirectResponse(url=f"{frontend_url}/?auth=success")
-
-
-@app.get("/auth/me", response_model=AuthStatusResponse)
-def auth_me(request: Request) -> AuthStatusResponse:
-    user = request.session.get("user")
-    if not user:
-        return AuthStatusResponse(authenticated=False, user=None)
-
-    if auth_store and user.get("github_id"):
-        try:
-            db_user = auth_store.get_user_by_github_id(user["github_id"])
-            if db_user:
-                request.session["user"] = db_user
-                user = db_user
-        except Exception as exc:
-            print(f"Failed to refresh auth user from DB: {exc}")
-
-    return AuthStatusResponse(authenticated=True, user=user)
-
-
-@app.post("/auth/logout")
-def auth_logout(request: Request) -> Dict[str, str]:
-    request.session.clear()
-    return {"message": "logged_out"}
-
-
-@app.post("/index")
-def index_repo(request: IndexRequest) -> Dict:
-    try:
-        analyzer = registry.get_or_create(
-            repo_path=request.repo_path,
-            session_dir=request.session_dir,
-            use_embeddings=request.use_embeddings,
-            embedding_model=request.embedding_model,
-        )
-        stats = _ensure_index(analyzer, request.max_commits, request.force_reindex)
-        return {
-            "message": "Repository indexed",
-            "repo_path": request.repo_path,
-            "session_dir": str(analyzer.session_dir),
-            "stats": stats,
-        }
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Indexing failed: {exc}")
-
-
-@app.post("/analyze", response_model=AnalyzeResponse)
-def analyze_query(request: AnalyzeRequest) -> AnalyzeResponse:
-    try:
-        analyzer = registry.get_or_create(
-            repo_path=request.repo_path,
-            session_dir=request.session_dir,
-            use_embeddings=request.use_embeddings,
-            embedding_model=request.embedding_model,
-        )
-
-        _ensure_index(analyzer, request.max_commits, force_reindex=False)
-
-        rag = RAGPipeline(analyzer=analyzer, verbose=False)
-        results = rag.retrieve(
-            query=request.query,
-            top_k=request.top_k,
-            analyze_candidates=request.analyze_candidates,
-            boost_freshness=request.boost_freshness,
-        )
-        answer = rag.synthesize_answer(request.query, results)
-
-        response_chat_session_id = request.chat_session_id
-        if chat_store:
-            try:
-                if not response_chat_session_id or not chat_store.session_exists(response_chat_session_id):
-                    response_chat_session_id = chat_store.create_session(repo_path=request.repo_path)
-
-                chat_store.append_message(
-                    response_chat_session_id,
-                    role="user",
-                    content=request.query,
-                    message_metadata={
-                        "repo_path": request.repo_path,
-                        "top_k": request.top_k,
-                        "analyze_candidates": request.analyze_candidates,
-                    },
-                )
-                chat_store.append_message(
-                    response_chat_session_id,
-                    role="assistant",
-                    content=answer,
-                    message_metadata={
-                        "evidence_count": len(results),
-                    },
-                )
-            except Exception as exc:
-                # Do not fail answer generation if chat persistence fails.
-                print(f"Failed to persist chat history: {exc}")
-
-        evidence = [r.to_dict() for r in results] if request.show_evidence else None
-        return AnalyzeResponse(
-            query=request.query,
-            answer=answer,
-            chat_session_id=response_chat_session_id,
-            evidence_count=len(results),
-            evidence=evidence,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {exc}")
-
-
-@app.post("/chat/session", response_model=ChatSessionCreateResponse)
-def create_chat_session(request: ChatSessionCreateRequest) -> ChatSessionCreateResponse:
-    if not chat_store:
-        raise HTTPException(status_code=503, detail="Chat persistence is not configured")
-
-    try:
-        session_id = chat_store.create_session(repo_path=request.repo_path)
-        return ChatSessionCreateResponse(chat_session_id=session_id)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to create chat session: {exc}")
-
-
-@app.get("/chat/{chat_session_id}", response_model=ChatHistoryResponse)
-def get_chat_history(chat_session_id: str) -> ChatHistoryResponse:
-    if not chat_store:
-        raise HTTPException(status_code=503, detail="Chat persistence is not configured")
-
-    try:
-        if not chat_store.session_exists(chat_session_id):
-            raise HTTPException(status_code=404, detail="Chat session not found")
-
-        messages = chat_store.get_messages(chat_session_id)
-        return ChatHistoryResponse(chat_session_id=chat_session_id, messages=messages)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to load chat history: {exc}")

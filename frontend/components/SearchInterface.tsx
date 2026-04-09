@@ -14,7 +14,7 @@ interface SearchInterfaceProps {
 
 export default function SearchInterface({ onResults, onLoading, onError, onQuerySubmitted, chatSessionId }: SearchInterfaceProps) {
   const [query, setQuery] = useState('')
-  const [repoPath, setRepoPath] = useState('/Users/yanshikesharwani/vscode/Git Archaeologist')
+  const [repoPath, setRepoPath] = useState('https://github.com/owner/repo')
   const [topK, setTopK] = useState(5)
   const [maxCommits, setMaxCommits] = useState(500)
 
@@ -59,14 +59,14 @@ export default function SearchInterface({ onResults, onLoading, onError, onQuery
         <div>
           <label className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-[hsl(var(--muted-foreground))]">
             <Database className="h-3.5 w-3.5" />
-            Repository Path
+            GitHub Repository URL
           </label>
           <input
             type="text"
             value={repoPath}
             onChange={(e) => setRepoPath(e.target.value)}
             className="electric-ring h-11 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--surface-0)/0.8)] px-3 text-sm text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))]"
-            placeholder="/path/to/your/repo"
+            placeholder="https://github.com/owner/repo"
           />
         </div>
 

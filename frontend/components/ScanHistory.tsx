@@ -1,4 +1,4 @@
-import { History, Sparkles, Timer } from 'lucide-react'
+import { History, Plus, Sparkles, Timer } from 'lucide-react'
 
 type ScanRecord = {
   id: string
@@ -10,6 +10,9 @@ type ScanRecord = {
 
 type ScanHistoryProps = {
   scans: ScanRecord[]
+  activeScanId?: string | null
+  onSelectScan?: (scanId: string) => void
+  onNewChat?: () => void
 }
 
 function formatTime(value: string): string {
@@ -17,7 +20,7 @@ function formatTime(value: string): string {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-export default function ScanHistory({ scans }: ScanHistoryProps) {
+export default function ScanHistory({ scans, activeScanId, onSelectScan, onNewChat }: ScanHistoryProps) {
   return (
     <div className="surface-panel sticky top-4 rounded-2xl p-4">
       <div className="terminal-chrome">
@@ -28,10 +31,20 @@ export default function ScanHistory({ scans }: ScanHistoryProps) {
       </div>
 
       <div className="mt-4">
-        <h2 className="inline-flex items-center gap-2 text-sm font-semibold uppercase tracking-[0.18em] text-[hsl(var(--muted-foreground))]">
-          <History className="h-3.5 w-3.5" />
-          Recent Excavations
-        </h2>
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="inline-flex items-center gap-2 text-sm font-semibold uppercase tracking-[0.18em] text-[hsl(var(--muted-foreground))]">
+            <History className="h-3.5 w-3.5" />
+            Recent Excavations
+          </h2>
+          <button
+            type="button"
+            onClick={onNewChat}
+            className="electric-ring inline-flex h-8 items-center justify-center gap-1 rounded-md border border-[hsl(var(--border-soft))] bg-[hsl(var(--surface-2))] px-2 text-xs font-medium text-[hsl(var(--foreground))] transition hover:border-[hsl(var(--primary)/0.4)] hover:text-[hsl(var(--primary-glow))]"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            New
+          </button>
+        </div>
       </div>
 
       {scans.length === 0 ? (
@@ -41,7 +54,15 @@ export default function ScanHistory({ scans }: ScanHistoryProps) {
       ) : (
         <ul className="mt-4 space-y-2">
           {scans.map((scan) => (
-            <li key={scan.id} className="fade-up panel-hover rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--surface-0)/0.7)] p-3">
+            <li
+              key={scan.id}
+              onClick={() => onSelectScan?.(scan.id)}
+              className={`fade-up panel-hover cursor-pointer rounded-lg border p-3 ${
+                activeScanId === scan.id
+                  ? 'border-[hsl(var(--primary)/0.7)] bg-[hsl(var(--primary)/0.12)]'
+                  : 'border-[hsl(var(--border))] bg-[hsl(var(--surface-0)/0.7)]'
+              }`}
+            >
               <p className="line-clamp-2 text-sm text-[hsl(var(--foreground))]">{scan.query}</p>
               <div className="mt-2 flex items-center justify-between text-xs text-[hsl(var(--muted-foreground))]">
                 <span className="inline-flex items-center gap-1 font-mono"><Timer className="h-3 w-3" />{formatTime(scan.createdAt)}</span>

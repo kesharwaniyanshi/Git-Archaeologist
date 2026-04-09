@@ -8,6 +8,7 @@ import json
 import os
 
 from core.embeddings import EmbeddingEngine, build_commit_semantic_text, rank_commits_by_semantic
+from core.github_fetcher import is_github_repo_url
 from core.summarizer import CommitSummarizer
 from core.vector_store import LocalVectorStore
 from .query_utils import (
@@ -241,6 +242,12 @@ class QueryDrivenAnalyzer:
                     return True
             except Exception as exc:
                 print(f"Failed to load commit index from PostgreSQL: {exc}")
+
+        # In GitHub URL mode, do not fallback to local disk sessions.
+        # This avoids stale/mismatched commit hashes and keeps behavior deployment-safe.
+        if is_github_repo_url(self.repo_path):
+            print("No persisted GitHub commit index found in PostgreSQL; skipping local session fallback")
+            return False
 
         session_path = Path(self.session_dir)
         if not session_path.exists():

@@ -1,10 +1,5 @@
 import { Activity, PanelLeftClose, PanelLeftOpen, SearchCode } from 'lucide-react'
-
-type AuthUser = {
-  login?: string
-  name?: string | null
-  avatar_url?: string | null
-}
+import { type AuthUser } from '@/lib/api'
 
 type HeaderProps = {
   sidebarOpen: boolean
@@ -16,7 +11,7 @@ type HeaderProps = {
 }
 
 export default function Header({ sidebarOpen, onToggleSidebar, authUser, authLoading, onLogin, onLogout }: HeaderProps) {
-  const displayName = authUser?.name || authUser?.login || 'Signed In'
+  const displayName = authUser?.email || authUser?.id || 'Signed In'
 
   return (
     <header className="border-b border-[hsl(var(--border))] bg-[hsl(var(--surface-1)/0.85)] backdrop-blur-md">
@@ -53,10 +48,6 @@ export default function Header({ sidebarOpen, onToggleSidebar, authUser, authLoa
           {authUser ? (
             <>
               <div className="hidden items-center gap-2 rounded-full border border-[hsl(var(--border-soft))] bg-[hsl(var(--surface-2))] px-3 py-1 text-xs text-[hsl(var(--foreground))] sm:inline-flex">
-                {authUser.avatar_url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={authUser.avatar_url} alt={displayName} className="h-4 w-4 rounded-full" />
-                ) : null}
                 <span>{displayName}</span>
               </div>
               <button
@@ -74,7 +65,7 @@ export default function Header({ sidebarOpen, onToggleSidebar, authUser, authLoa
               disabled={authLoading}
               className="electric-ring inline-flex h-9 items-center justify-center rounded-md border border-[hsl(var(--border-soft))] bg-[hsl(var(--surface-2))] px-3 text-xs font-medium text-[hsl(var(--foreground))] transition hover:border-[hsl(var(--primary)/0.4)] hover:text-[hsl(var(--primary-glow))] disabled:cursor-not-allowed disabled:opacity-70"
             >
-              {authLoading ? 'Checking...' : 'Sign in with GitHub'}
+              {authLoading ? 'Checking...' : 'Sign in'}
             </button>
           )}
 
