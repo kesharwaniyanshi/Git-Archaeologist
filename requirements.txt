@@ -9,7 +9,7 @@ numpy<2.0
 fastapi==0.115.0
 uvicorn==0.30.6
 sqlalchemy==2.0.38
-psycopg[binary]==3.2.6
+psycopg[binary]==3.2.13
 pgvector==0.3.6
 alembic==1.14.1
 authlib==1.4.1
