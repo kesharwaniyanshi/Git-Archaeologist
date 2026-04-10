@@ -84,3 +84,45 @@ export const authApi = {
     return response.data
   }
 }
+
+// ── Chat Session Types ──
+export interface ChatMessageItem {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  created_at: string
+}
+
+export interface ChatSessionItem {
+  chat_session_id: string
+  title: string | null
+  created_at: string | null
+  updated_at: string | null
+  message_count: number
+}
+
+export interface SendMessageResponse {
+  user_message: ChatMessageItem
+  assistant_message: ChatMessageItem
+}
+
+// ── Chat Session API ──
+export async function createChatSession(repositoryId?: string) {
+  const response = await apiClient.post('/chat/sessions', { repository_id: repositoryId || null })
+  return response.data as { chat_session_id: string; title: string | null }
+}
+
+export async function listChatSessions(limit = 50) {
+  const response = await apiClient.get('/chat/sessions', { params: { limit } })
+  return response.data as { sessions: ChatSessionItem[] }
+}
+
+export async function getChatHistory(sessionId: string) {
+  const response = await apiClient.get(`/chat/sessions/${sessionId}`)
+  return response.data as { chat_session_id: string; title: string | null; messages: ChatMessageItem[] }
+}
+
+export async function sendMessage(sessionId: string, content: string): Promise<SendMessageResponse> {
+  const response = await apiClient.post(`/chat/sessions/${sessionId}/messages`, { content })
+  return response.data
+}

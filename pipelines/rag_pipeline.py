@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 import json
 import time
 
@@ -26,12 +26,13 @@ class RAGPipeline:
     def retrieve(
         self,
         query: str,
-        top_k: int = 5,
+        top_k: int = 20,
         analyze_candidates: int = 20,
         deduplicate: bool = True,
         boost_freshness: bool = False,
         filter_authors: Optional[List[str]] = None,
         exclude_authors: Optional[List[str]] = None,
+        commit_filter: Optional[Callable[[Dict], bool]] = None,
     ) -> List[RetrievalResult]:
         start_time = time.time()
 
@@ -43,6 +44,7 @@ class RAGPipeline:
             query,
             top_k=top_k,
             analyze_candidates=analyze_candidates,
+            commit_filter=commit_filter,
         )
 
         scores = candidate_commit_scores(query, self.analyzer.commits_index)
@@ -101,9 +103,9 @@ class RAGPipeline:
         if not results:
             return "Low", "No supporting commits were retrieved.", 0.0
 
-        top = results[:5]
+        top = results[:10]
         avg_relevance = sum(max(0.0, min(1.0, item.relevance_score)) for item in top) / len(top)
-        evidence_breadth = min(len(top), 5) / 5.0
+        evidence_breadth = min(len(top), 10) / 10.0
         success_ratio = sum(1 for item in top if item.status != "error") / len(top)
         has_diffs = sum(1 for item in top if item.diff_snippets) / len(top)
 
@@ -120,6 +122,8 @@ class RAGPipeline:
         query: str,
         results: List[RetrievalResult],
         conversation_history: Optional[List[Dict]] = None,
+        contributor_mode: bool = False,
+        contributor_label: str = "",
     ) -> str:
         """Synthesize a natural answer using raw diff evidence and optional conversation history."""
         if not results:
@@ -127,7 +131,7 @@ class RAGPipeline:
 
         # Build rich evidence blocks with actual code diffs
         evidence_blocks = []
-        for item in results[:5]:
+        for item in results[:10]:
             block = f"### Commit {item.short_hash} by {item.author} ({item.date})\n"
             block += f"Message: {item.message}\n"
             if item.files_changed:
@@ -137,6 +141,14 @@ class RAGPipeline:
             evidence_blocks.append(block)
 
         evidence_text = "\n".join(evidence_blocks)
+
+        module_hint = ""
+        if contributor_mode:
+            from analyzers.contributor_intent import module_touch_summary
+
+            summary = module_touch_summary(results)
+            if summary:
+                module_hint = summary + "\n\n"
 
         # Build conversation context for multi-turn
         history_text = ""
@@ -150,21 +162,35 @@ class RAGPipeline:
             if history_lines:
                 history_text = "Previous conversation:\n" + "\n".join(history_lines) + "\n\n"
 
-        system_prompt = (
-            "You are Git Archaeologist, an expert software forensics assistant. "
-            "You analyze Git repository history to answer questions about why and how code evolved.\n\n"
-            "Rules:\n"
-            "- Ground every claim in the commit evidence provided. Cite commit hashes inline (e.g., 'in abc12345').\n"
-            "- When code diffs are available, reference specific lines, functions, or patterns you can see in them.\n"
-            "- Write naturally and conversationally. Avoid rigid numbered lists unless truly helpful.\n"
-            "- If the evidence is partial or ambiguous, say so explicitly.\n"
-            "- If this is a follow-up question, use the conversation history for context.\n"
-            "- Do NOT invent information. Do NOT include a confidence label.\n"
-        )
+        if contributor_mode:
+            who = contributor_label or "the contributor"
+            system_prompt = (
+                "You are Git Archaeologist. The user asked about a specific contributor's work. "
+                f"Summarize {who}'s impact using ONLY the commits and file paths in the evidence.\n\n"
+                "Rules:\n"
+                "- Organize the answer by themes and by top-level directory / module where helpful.\n"
+                "- Mention roughly how activity is spread across areas (use the module summary when provided).\n"
+                "- Cite short commit hashes inline. Note if the sample may not include every commit.\n"
+                "- Write in natural language; avoid empty praise. Do NOT invent commits or files.\n"
+                "- If this is a follow-up, use the conversation history.\n"
+            )
+        else:
+            system_prompt = (
+                "You are Git Archaeologist, an expert software forensics assistant. "
+                "You analyze Git repository history to answer questions about why and how code evolved.\n\n"
+                "Rules:\n"
+                "- Ground every claim in the commit evidence provided. Cite commit hashes inline (e.g., 'in abc12345').\n"
+                "- When code diffs are available, reference specific lines, functions, or patterns you can see in them.\n"
+                "- Write naturally and conversationally. Avoid rigid numbered lists unless truly helpful.\n"
+                "- If the evidence is partial or ambiguous, say so explicitly.\n"
+                "- If this is a follow-up question, use the conversation history for context.\n"
+                "- Do NOT invent information. Do NOT include a confidence label.\n"
+            )
 
         user_prompt = (
             f"{history_text}"
             f"Question: {query}\n\n"
+            f"{module_hint}"
             f"Repository evidence:\n{evidence_text}"
         )
 

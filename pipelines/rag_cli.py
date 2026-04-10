@@ -13,7 +13,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("repo", help="Path to repository")
     parser.add_argument("--query", required=True, help="Question to search")
     parser.add_argument("--queries-file", help="File with queries (one per line)")
-    parser.add_argument("--top-k", type=int, default=5, help="Top K results")
+    parser.add_argument("--top-k", type=int, default=10, help="Top K results")
     parser.add_argument("--session-dir", help="Session directory for persistence")
     parser.add_argument("--export", help="Export results to JSON")
     parser.add_argument("--no-freshness-boost", action="store_true")

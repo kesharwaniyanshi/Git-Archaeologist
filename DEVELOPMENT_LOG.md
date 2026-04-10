@@ -148,3 +148,49 @@ This document serves as the chronological step-by-step development log and Archi
 - **Before:** Hard limit of 5 files × 50 lines. File #6+ was completely invisible. No query-awareness in file ordering.
 - **After:** Uses a 6000-character budget per commit. Files are sorted by query relevance (filename token overlap) and change size. Query-relevant files get full filtered diffs first. Remaining files fill the leftover budget. Files that exceed the budget get a compact one-line summary (filename, change type, +/- counts), so the LLM still knows *every* file that was touched.
 - **Reasoning:** A commit modifying 15 files shouldn't have 10 of them invisible. The budget approach ensures the most forensically valuable code fills the context window, while every file still appears at minimum as a compact reference. The system now adapts: a commit with 3 large files uses the full budget on them, while a commit with 20 small files fits all of them.
+
+---
+
+## Phase 6: Persistent Chat Sessions & Conversation Memory (2026-04-09)
+
+### Step 23: SQLAlchemy Chat Models
+- **Task:** Implement database storage for chat sessions and messages.
+- **File Modified:** `db/models.py`.
+- **Changes:** Added `ChatSession` (linked to `User` and optionally `Repository`) and `ChatMessage` (role, content, timestamp). Removed the legacy Postgres-only dict-based chat store.
+
+### Step 24: Rewriting Chat Routes
+- **Task:** Rebuild the `/chat` API endpoints using FastAPI + SQLAlchemy.
+- **File Modified:** `api/routes/chat.py`.
+- **Changes:** 
+  - All endpoints are now user-scoped (requires JWT).
+  - Implemented `POST /chat/sessions`, `GET /chat/sessions`, and `GET /chat/sessions/{id}`.
+  - The core endpoint `POST /chat/sessions/{id}/messages` now: (1) saves the user message, (2) loads the last 10 messages as `conversation_history`, (3) runs the full RAG pipeline, and (4) saves the generated assistant message.
+
+### Step 25: Frontend Chat Interface
+- **Task:** Build the chat UI and wire it into the main layout.
+- **Files Modified:** `frontend/components/ChatPanel.tsx`, `frontend/components/ScanHistory.tsx`, `frontend/app/page.tsx`.
+- **Changes:** 
+  - Created `ChatPanel` with Markdown, GFM, and Prism syntax highlighting support.
+  - Handles optimistic UI updates and auto-scrolls on new messages.
+  - Refactored `ScanHistory` to display real `ChatSessionItem`s fetched from the DB instead of mock data. The UI now splits the screen between the repo linker and the active chat thread.
+
+### Step 26: Fix RAG Pipeline — DB-Loaded Commits Contain Diffs
+- **Task:** Fix `'dict' object has no attribute 'lower'` crash in the RAG pipeline.
+- **Files Modified:** `analyzers/query_utils.py`, `analyzers/query_analyzer.py`.
+- **Root Cause:** Commits loaded from SQLAlchemy had `files` as `[{filename, status, diff, ...}]` (dicts), but `candidate_commit_scores()` and `answer_question()` assumed they were plain strings. Additionally, `fetch_diffs_for_commits()` tried to re-fetch from the GitHub API even though diffs were already in memory.
+- **Fix:** 
+  - `query_utils.py`: `candidate_commit_scores()` now handles both dict and string file entries.
+  - `query_analyzer.py`: `answer_question()` detects when commits already carry diff data and reformats them in-place, skipping the redundant API call entirely.
+  - Removed dead `index_store` and `summary_store` references from the legacy pgvector stores.
+
+### Step 27: Wire load_session() Into Chat Route
+- **Task:** Ensure the analyzer actually loads commits from the DB before the RAG pipeline runs.
+- **File Modified:** `api/routes/chat.py`.
+- **Change:** Added `analyzer.load_session()` call when `commits_index` is empty, so the pipeline hydrates from SQLAlchemy before retrieval. Also removed the `VECTOR_BACKEND == "pgvector"` gate from `load_session()` since all GitHub repos should load from the DB regardless of vector store backend.
+
+### Step 28: Activate Semantic Embeddings for DB-Loaded Repos
+- **Task:** Fix dead semantic scoring path — embeddings were never built for repos loaded from the DB.
+- **File Modified:** `analyzers/query_analyzer.py` — `load_session()`.
+- **Before:** After loading commits from PostgreSQL, the code tried to load a pre-built vector store from disk. Since one never existed, it printed "0 embeddings" and continued with heuristic-only retrieval. The `0.55 * semantic` weight in `_retrieve_candidates()` was contributing nothing.
+- **After:** If the vector store is empty or missing, `load_session()` now builds embeddings on the fly using `EmbeddingEngine` + `build_commit_semantic_text()`, then saves the vector store to disk for future reuse. First query incurs a one-time ~2-5 second encoding cost; subsequent queries are instant.
+- **Impact on responses:** With semantic scoring active, the retrieval pipeline can now surface commits even when query keywords don't match the commit message. For example, asking "how was real-time communication added?" can now match a commit with message "add socket.io chat feature" because the sentence-transformer understands semantic similarity. This should noticeably improve answer quality for conceptual/abstract questions.

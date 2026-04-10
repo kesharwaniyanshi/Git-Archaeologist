@@ -127,7 +127,8 @@ def candidate_commit_scores(query: str, commits: List[Dict]) -> Dict[str, float]
         msg_score = message_similarity(query, commit.get("message", ""))
 
         filename_score = 0.0
-        for filename in commit.get("files", []):
+        for file_obj in commit.get("files", []):
+            filename = file_obj.get("filename", "") if isinstance(file_obj, dict) else str(file_obj)
             if q_tokens & set(tokenize(filename)):
                 filename_score = 1.0
                 break

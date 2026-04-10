@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 import json
 import os
 import re
 
+import structlog
 from core.embeddings import EmbeddingEngine, build_commit_semantic_text, rank_commits_by_semantic
 from core.github_fetcher import is_github_repo_url
 from core.summarizer import CommitSummarizer
 from core.vector_store import LocalVectorStore
+from db.session import SessionLocal
 from .query_utils import (
     candidate_commit_scores,
     fetch_diffs_for_commits,
@@ -43,18 +45,7 @@ class QueryDrivenAnalyzer:
         self.session_dir = session_dir or Path(".") / ".git_arch_sessions" / "default"
         self.vector_backend = os.getenv("VECTOR_BACKEND", "faiss").strip().lower()
         self.vector_store: Optional[object] = None
-        self.index_store: Optional[object] = None
-        self.summary_store: Optional[object] = None
-
-        if self.vector_backend == "pgvector":
-            try:
-                from core.index_store_pg import PostgresIndexStore
-                from core.summary_store_pg import PostgresSummaryStore
-
-                self.index_store = PostgresIndexStore()
-                self.summary_store = PostgresSummaryStore()
-            except Exception as exc:
-                print(f"Postgres stores unavailable; continuing without DB persistence: {exc}")
+        self.logger = structlog.get_logger(__name__)
 
     def _create_vector_store(self, dimension: int = 384) -> object:
         if self.vector_backend == "pgvector":
@@ -66,13 +57,6 @@ class QueryDrivenAnalyzer:
     def index_repository(self, max_commits: Optional[int] = None, save_to_disk: bool = True) -> Dict:
         print(f"Indexing repository: {self.repo_path}")
         self.commits_index = ingest_light(self.repo_path, max_commits or 1000)
-
-        if self.index_store and self.commits_index:
-            try:
-                self.index_store.replace_commits(self.repo_path, self.commits_index)
-                print(f"Persisted {len(self.commits_index)} commits to PostgreSQL")
-            except Exception as exc:
-                print(f"Failed to persist commit index to PostgreSQL: {exc}")
 
         if self.use_embeddings and self.commits_index:
             try:
@@ -111,40 +95,65 @@ class QueryDrivenAnalyzer:
         self.vector_store.save(str(self.session_dir))
         print(f"Saved vector store using backend={self.vector_backend}")
 
-    def _retrieve_candidates(self, query: str, analyze_candidates: int) -> List[Dict]:
-        heuristic_scores = candidate_commit_scores(query, self.commits_index)
-        by_hash = {commit["hash"]: commit for commit in self.commits_index}
+    def _retrieve_candidates(
+        self,
+        query: str,
+        analyze_candidates: int,
+        commit_subset: Optional[List[Dict]] = None,
+    ) -> List[Dict]:
+        source = self.commits_index if commit_subset is None else commit_subset
+        if not source:
+            return []
+
+        allowed_hashes = {c["hash"] for c in source}
+        by_hash = {commit["hash"]: commit for commit in source}
+
+        heuristic_scores = candidate_commit_scores(query, source)
 
         semantic_scores: Dict[str, float] = {}
 
         if self.vector_store and self.embedding_engine:
             try:
                 query_embedding = self.embedding_engine.encode_texts([query])[0]
-                vector_results = self.vector_store.search(
-                    query_embedding,
-                    top_k=min(len(self.commits_index), max(analyze_candidates * 3, 30)),
-                )
-                for index, (commit_hash, _similarity, _meta) in enumerate(vector_results):
-                    semantic_scores[commit_hash] = 1.0 - (index / max(1, len(vector_results) - 1))
+                search_k = min(len(self.commits_index), max(analyze_candidates * 3, 30))
+                vector_results = self.vector_store.search(query_embedding, top_k=search_k)
+                ranked_allowed = [
+                    (commit_hash, _similarity, _meta)
+                    for commit_hash, _similarity, _meta in vector_results
+                    if commit_hash in allowed_hashes
+                ]
+                for index, (commit_hash, _similarity, _meta) in enumerate(ranked_allowed):
+                    semantic_scores[commit_hash] = 1.0 - (index / max(1, len(ranked_allowed) - 1))
             except Exception as exc:
                 print(f"Vector store search failed: {exc}")
 
         if not semantic_scores and self.embedding_engine and self.commit_embeddings:
-            semantic_ranked = rank_commits_by_semantic(
-                query,
-                self.commits_index,
-                self.commit_embeddings,
-                self.embedding_engine,
-                top_n=min(len(self.commits_index), max(analyze_candidates * 3, 30)),
-            )
-            total = max(1, len(semantic_ranked) - 1)
-            for index, commit in enumerate(semantic_ranked):
-                semantic_scores[commit["hash"]] = 1.0 - (index / total)
+            full_index_by_hash = {c["hash"]: idx for idx, c in enumerate(self.commits_index)}
+            subset_commits: List[Dict] = []
+            subset_embeddings: List[List[float]] = []
+            for commit in source:
+                idx = full_index_by_hash.get(commit["hash"])
+                if idx is None or idx >= len(self.commit_embeddings):
+                    continue
+                subset_commits.append(commit)
+                subset_embeddings.append(self.commit_embeddings[idx])
+
+            if subset_commits:
+                semantic_ranked = rank_commits_by_semantic(
+                    query,
+                    subset_commits,
+                    subset_embeddings,
+                    self.embedding_engine,
+                    top_n=min(len(subset_commits), max(analyze_candidates * 3, 30)),
+                )
+                total = max(1, len(semantic_ranked) - 1)
+                for index, commit in enumerate(semantic_ranked):
+                    semantic_scores[commit["hash"]] = 1.0 - (index / total)
 
         combined = []
         all_hashes = set(heuristic_scores) | set(semantic_scores)
         for commit_hash in all_hashes:
-            score = 0.45 * heuristic_scores.get(commit_hash, 0.0) + 0.55 * semantic_scores.get(commit_hash, 0.0)
+            score = 0.35 * heuristic_scores.get(commit_hash, 0.0) + 0.65 * semantic_scores.get(commit_hash, 0.0)
             commit = by_hash.get(commit_hash)
             if commit:
                 combined.append((score, commit))
@@ -152,29 +161,58 @@ class QueryDrivenAnalyzer:
         combined.sort(key=lambda item: item[0], reverse=True)
         return [commit for _, commit in combined[:analyze_candidates]]
 
-    def answer_question(self, query: str, top_k: int = 5, analyze_candidates: int = 20) -> List[Dict]:
+    def answer_question(
+        self,
+        query: str,
+        top_k: int = 10,
+        analyze_candidates: int = 20,
+        commit_filter: Optional[Callable[[Dict], bool]] = None,
+    ) -> List[Dict]:
         """Retrieve top candidate commits with their diffs. No per-commit LLM calls."""
         if not self.commits_index:
             raise ValueError("Repository not indexed. Call index_repository() first.")
 
         print(f"\nQuestion: {query}")
-        candidates = self._retrieve_candidates(query, analyze_candidates)
+        subset: Optional[List[Dict]] = None
+        if commit_filter:
+            subset = [c for c in self.commits_index if commit_filter(c)]
+        candidates = self._retrieve_candidates(query, analyze_candidates, commit_subset=subset)
         print(f"Retrieved {len(candidates)} candidate commits")
 
         candidate_hashes = [commit["hash"] for commit in candidates]
 
-        # Load any previously cached summaries (optional enrichment, not required)
-        if self.summary_store and candidate_hashes:
-            try:
-                persisted = self.summary_store.get_summaries_for_hashes(candidate_hashes)
-                if persisted:
-                    self.summary_cache.update(persisted)
-            except Exception as exc:
-                print(f"Failed loading persisted summaries from PostgreSQL: {exc}")
+        # Check if commits already have diff data (loaded from our DB)
+        # If so, use them directly — no need to re-fetch from GitHub API
+        has_db_diffs = any(
+            commit.get("files") and isinstance(commit["files"], list)
+            and any(isinstance(f, dict) and f.get("diff") for f in commit["files"])
+            for commit in candidates
+        )
 
-        # Fetch raw diffs for candidates — this is the critical evidence source
-        commits_with_diffs = fetch_diffs_for_commits(self.repo_path, candidate_hashes)
-        commits_by_hash = {commit["hash"]: commit for commit in commits_with_diffs}
+        if has_db_diffs:
+            # Reformat in-memory DB commits into the shape answer_question expects
+            commits_by_hash = {}
+            for commit in candidates:
+                commits_by_hash[commit["hash"]] = {
+                    "hash": commit["hash"],
+                    "message": commit.get("message", ""),
+                    "author": commit.get("author", "Unknown"),
+                    "date": commit.get("date", ""),
+                    "files_changed": [
+                        {
+                            "filename": f.get("filename", "") if isinstance(f, dict) else str(f),
+                            "change_type": f.get("status", "MODIFIED") if isinstance(f, dict) else "MODIFIED",
+                            "additions": f.get("lines_added", 0) if isinstance(f, dict) else 0,
+                            "deletions": f.get("lines_removed", 0) if isinstance(f, dict) else 0,
+                            "diff": f.get("diff", "") if isinstance(f, dict) else "",
+                        }
+                        for f in commit.get("files", [])
+                    ],
+                }
+        else:
+            # Fetch raw diffs for candidates via API — fallback path
+            commits_with_diffs = fetch_diffs_for_commits(self.repo_path, candidate_hashes)
+            commits_by_hash = {commit["hash"]: commit for commit in commits_with_diffs}
 
         analyzed = []
         for commit_meta in candidates[:top_k]:
@@ -189,7 +227,7 @@ class QueryDrivenAnalyzer:
             diff_snippet = ""
             file_list = []
             files_changed = commit_data.get("files_changed", [])
-            COMMIT_BUDGET = 6000  # characters per commit — fits ~5 commits in Groq context
+            COMMIT_BUDGET = 15000  # characters per commit — Gemini 1M context allows generous budgets
             budget_remaining = COMMIT_BUDGET
 
             # Sort files: query-relevant filenames first, then by change size (desc)
@@ -300,23 +338,81 @@ class QueryDrivenAnalyzer:
         print("Session saved")
 
     def load_session(self) -> bool:
-        if self.index_store:
+        if is_github_repo_url(self.repo_path):
+            db = None
             try:
-                print("Loading commit index from PostgreSQL")
-                self.commits_index = self.index_store.load_commits(self.repo_path)
+                self.logger.info("loading_commit_index_from_postgres", repo_path=self.repo_path)
+                from db.models import Repository, Commit, FileDiff
+                db = SessionLocal()
+                
+                repo = db.query(Repository).filter(Repository.url == self.repo_path).first()
+                if not repo:
+                    self.logger.warning("repository_not_found_in_db", repo_path=self.repo_path)
+                    return False
+                    
+                commits = db.query(Commit).filter(Commit.repository_id == repo.id).order_by(Commit.timestamp.desc()).all()
+                
+                self.commits_index = []
+                for commit in commits:
+                    db_diffs = db.query(FileDiff).filter(FileDiff.commit_id == commit.id).all()
+                    
+                    self.commits_index.append({
+                        "hash": commit.hash,
+                        "short_hash": commit.hash[:8],
+                        "message": commit.message or "",
+                        "author": commit.author_name or "Unknown",
+                        "author_email": (commit.author_email or "").strip(),
+                        "date": str(commit.timestamp),
+                        "files": [
+                            {
+                                "filename": d.file_path,
+                                "status": d.status,
+                                "diff": d.diff_content,
+                                "lines_added": 0, # not natively in schema yet, could be inferred
+                                "lines_removed": 0
+                            }
+                            for d in db_diffs
+                        ]
+                    })
+                
                 if self.commits_index:
                     self.load_cache(str(Path(self.session_dir) / "cache.json"))
+                    
+                    embeddings_loaded = False
                     if self.use_embeddings:
+                        # Try loading pre-built vector store from disk first
                         try:
                             self.vector_store = self._create_vector_store()
                             self.vector_store.load(str(self.session_dir))
-                            print(f"Loaded vector store with {self.vector_store.size()} embeddings")
+                            if self.vector_store.size() > 0:
+                                print(f"Loaded vector store with {self.vector_store.size()} embeddings")
+                                embeddings_loaded = True
+                            else:
+                                print("Vector store loaded but empty — will rebuild")
                         except Exception as exc:
                             print(f"Could not load vector store: {exc}")
+                        
+                        # Build embeddings from scratch if not loaded
+                        if not embeddings_loaded:
+                            try:
+                                print(f"Building embeddings for {len(self.commits_index)} commits...")
+                                self.embedding_engine = EmbeddingEngine(self.embedding_model)
+                                commit_texts = [build_commit_semantic_text(c) for c in self.commits_index]
+                                self.commit_embeddings = self.embedding_engine.encode_texts(commit_texts)
+                                self._build_and_save_vector_store()
+                                print(f"Built and saved {len(self.commit_embeddings)} embeddings")
+                            except Exception as exc:
+                                self.embedding_engine = None
+                                self.commit_embeddings = []
+                                print(f"Embeddings unavailable; heuristic-only retrieval: {exc}")
+                    
                     print(f"Loaded {len(self.commits_index)} commits from PostgreSQL")
                     return True
             except Exception as exc:
-                print(f"Failed to load commit index from PostgreSQL: {exc}")
+                self.logger.warning("failed_loading_commit_index_from_postgres", error=str(exc))
+            finally:
+                if db is not None:
+                    db.close()
 
         # In GitHub URL mode, do not fallback to local disk sessions.
         # This avoids stale/mismatched commit hashes and keeps behavior deployment-safe.
@@ -378,7 +474,7 @@ def run_cli() -> None:
             analyzer.save_session()
 
     if args.query:
-        results = analyzer.answer_question(args.query, top_k=5, analyze_candidates=20)
+        results = analyzer.answer_question(args.query, top_k=10, analyze_candidates=20)
         print("\nTop results:")
         for result in results:
             print(result["hash"][:8], result["summary"])

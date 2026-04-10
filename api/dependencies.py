@@ -40,25 +40,8 @@ def get_current_user(
 
 logger = structlog.get_logger()
 
-_chat_store = None
 _auth_store = None
 _oauth_client = None
-
-def _create_chat_store():
-    if not os.getenv("DATABASE_URL"):
-        return None
-    try:
-        from core.chat_store_pg import PostgresChatStore
-        return PostgresChatStore()
-    except Exception as exc:
-        logger.warning("chat_store_disabled", error=str(exc))
-        return None
-
-def get_chat_store():
-    global _chat_store
-    if _chat_store is None:
-        _chat_store = _create_chat_store()
-    return _chat_store
 
 def _create_auth_store():
     if not os.getenv("DATABASE_URL"):

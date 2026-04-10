@@ -14,7 +14,7 @@ export default function Header({ sidebarOpen, onToggleSidebar, authUser, authLoa
   const displayName = authUser?.email || authUser?.id || 'Signed In'
 
   return (
-    <header className="border-b border-[hsl(var(--border))] bg-[hsl(var(--surface-1)/0.85)] backdrop-blur-md">
+    <header className="sticky top-0 z-40 border-b border-[hsl(var(--border))] bg-[hsl(var(--surface-1)/0.85)] backdrop-blur-md">
       <div className="mx-auto flex w-full max-w-[1500px] items-center justify-between gap-3 px-3 py-3 sm:px-5 lg:px-8">
         <div className="flex min-w-0 items-center gap-3">
           <button

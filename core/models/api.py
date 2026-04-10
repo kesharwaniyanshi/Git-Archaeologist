@@ -24,7 +24,7 @@ class AnalyzeRequest(BaseModel):
     chat_session_id: Optional[str] = Field(default=None, description="Existing chat session identifier")
     session_dir: Optional[str] = Field(default=None, description="Session directory for persistence")
     max_commits: int = Field(default=500, ge=1, le=20000)
-    top_k: int = Field(default=5, ge=1, le=50)
+    top_k: int = Field(default=10, ge=1, le=50)
     analyze_candidates: int = Field(default=20, ge=1, le=200)
     use_embeddings: bool = True
     embedding_model: str = "all-MiniLM-L6-v2"
@@ -39,24 +39,39 @@ class AnalyzeResponse(BaseModel):
     evidence: Optional[List[Dict]] = None
 
 class ChatSessionCreateRequest(BaseModel):
-    repo_path: Optional[str] = Field(default=None, description="Public GitHub repository URL")
+    repository_id: Optional[str] = Field(default=None, description="Optional repository to scope this session to")
 
 class ChatSessionCreateResponse(BaseModel):
     chat_session_id: str
+    title: Optional[str] = None
+
+class ChatMessageItem(BaseModel):
+    id: str
+    role: str
+    content: str
+    created_at: str
 
 class ChatHistoryResponse(BaseModel):
     chat_session_id: str
-    messages: List[Dict]
+    title: Optional[str] = None
+    messages: List[ChatMessageItem]
 
 class ChatSessionListItem(BaseModel):
     chat_session_id: str
+    title: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
-    last_user_query: str = ""
     message_count: int = 0
 
 class ChatSessionListResponse(BaseModel):
     sessions: List[ChatSessionListItem]
+
+class SendMessageRequest(BaseModel):
+    content: str = Field(..., min_length=1, description="User's message text")
+
+class SendMessageResponse(BaseModel):
+    user_message: ChatMessageItem
+    assistant_message: ChatMessageItem
 
 class AuthStatusResponse(BaseModel):
     authenticated: bool

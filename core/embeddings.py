@@ -38,7 +38,13 @@ def build_commit_semantic_text(commit: Dict) -> str:
     """
     message = commit.get("message", "")
     files = commit.get("files", []) or []
-    file_blob = " ".join(files[:20])
+    file_names = []
+    for f in files[:20]:
+        if isinstance(f, dict):
+            file_names.append(f.get("filename", ""))
+        else:
+            file_names.append(str(f))
+    file_blob = " ".join(file_names)
     return f"message: {message}\nfiles: {file_blob}".strip()
 
 
