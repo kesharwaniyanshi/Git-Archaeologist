@@ -38,8 +38,11 @@ export default function AuthModal({ isOpen, onClose }: AuthModalProps) {
         toast.success("Successfully created account!");
         onClose();
       }
-    } catch (err: any) {
-      const errorMsg = err.response?.data?.detail || "Authentication failed";
+    } catch (err: unknown) {
+      const errorMsg =
+        err && typeof err === "object" && "response" in err
+          ? ((err as { response?: { data?: { detail?: string } } }).response?.data?.detail || "Authentication failed")
+          : "Authentication failed";
       setError(errorMsg);
       toast.error(errorMsg);
     } finally {

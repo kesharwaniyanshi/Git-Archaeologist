@@ -7,7 +7,6 @@ import { toast } from 'sonner'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 
 interface ChatPanelProps {
   sessionId: string | null
@@ -42,6 +41,33 @@ export default function ChatPanel({ sessionId, repositoryId, onNewSessionCreated
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }
+
+  const markdownComponents = {
+    code({
+      inline,
+      className,
+      children,
+      ...props
+    }: React.HTMLAttributes<HTMLElement> & { inline?: boolean; className?: string; children?: React.ReactNode }) {
+      const match = /language-(\w+)/.exec(className || '')
+      if (!inline && match) {
+        return (
+          <SyntaxHighlighter
+            language={match[1]}
+            PreTag="div"
+            customStyle={{ margin: '1em 0', borderRadius: '0.5rem', background: '#0d1117' }}
+          >
+            {String(children).replace(/\n$/, '')}
+          </SyntaxHighlighter>
+        )
+      }
+      return (
+        <code {...props} className="bg-[hsl(var(--surface-2))] px-1.5 py-0.5 rounded-md font-mono text-xs text-[hsl(var(--primary-glow))]">
+          {children}
+        </code>
+      )
+    },
   }
 
   // Auto-scroll when messages change
@@ -109,7 +135,7 @@ export default function ChatPanel({ sessionId, repositoryId, onNewSessionCreated
           <div className="flex h-full flex-col items-center justify-center text-center opacity-70">
             <Sparkles className="h-10 w-10 text-[hsl(var(--primary))] mb-3" />
             <p className="text-[hsl(var(--muted-foreground))]">Ask a question about the repository history.</p>
-            <p className="text-xs text-[hsl(var(--muted-foreground))] mt-1">E.g., "Why were the auth tests disabled last week?"</p>
+            <p className="text-xs text-[hsl(var(--muted-foreground))] mt-1">E.g., &quot;Why were the auth tests disabled last week?&quot;</p>
           </div>
         )}
 
@@ -132,25 +158,7 @@ export default function ChatPanel({ sessionId, repositoryId, onNewSessionCreated
                 <div className="prose prose-invert prose-sm max-w-none">
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
-                    components={{
-                      code({node, inline, className, children, ...props}: any) {
-                        const match = /language-(\w+)/.exec(className || '')
-                        return !inline && match ? (
-                          <SyntaxHighlighter
-                            {...props}
-                            children={String(children).replace(/\n$/, '')}
-                            style={vscDarkPlus as any}
-                            language={match[1]}
-                            PreTag="div"
-                            customStyle={{ margin: '1em 0', borderRadius: '0.5rem', background: '#0d1117' }}
-                          />
-                        ) : (
-                          <code {...props} className="bg-[hsl(var(--surface-2))] px-1.5 py-0.5 rounded-md font-mono text-xs text-[hsl(var(--primary-glow))]">
-                            {children}
-                          </code>
-                        )
-                      }
-                    }}
+                    components={markdownComponents}
                   >
                     {msg.content}
                   </ReactMarkdown>

@@ -1,16 +1,16 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import SearchInterface from '@/components/SearchInterface'
 import Header from '@/components/Header'
 import ScanHistory from '@/components/ScanHistory'
 import AuthModal from '@/components/auth/AuthModal'
 import ChatPanel from '@/components/ChatPanel'
 import { useAuth } from '@/lib/auth'
-import { ChatSessionItem, listChatSessions } from '@/lib/api'
+import { ChatSessionItem, RepositoryResponse, listChatSessions } from '@/lib/api'
 
 export default function Home() {
-  const [results, setResults] = useState<any>(null)
+  const [results, setResults] = useState<RepositoryResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
@@ -21,7 +21,7 @@ export default function Home() {
   const { user: authUser, loading: authLoading, logout } = useAuth()
 
   // Load chat sessions when authenticated
-  const fetchSessions = async () => {
+  const fetchSessions = useCallback(async () => {
     if (!authUser) {
       setSessions([])
       return
@@ -32,11 +32,11 @@ export default function Home() {
     } catch (err) {
       console.error('Failed to load sessions', err)
     }
-  }
+  }, [authUser])
 
   useEffect(() => {
     fetchSessions()
-  }, [authUser])
+  }, [fetchSessions])
 
   const handleLogin = () => {
     setAuthModalOpen(true)
@@ -46,7 +46,7 @@ export default function Home() {
     logout()
   }
 
-  const handleResults = (data: any) => {
+  const handleResults = (data: RepositoryResponse) => {
     setResults(data)
   }
 

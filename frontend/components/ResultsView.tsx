@@ -16,7 +16,11 @@ interface ResultsViewProps {
     confidence?: string
     confidence_score?: number
     results?: Result[]
-    metadata?: any
+    metadata?: {
+      total_commits_indexed?: number
+      candidates_analyzed?: number
+      query_time_seconds?: number
+    }
   }
 }
 

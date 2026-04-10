@@ -2,11 +2,11 @@
 
 import { useState } from 'react'
 import { Database, Link, Loader2 } from 'lucide-react'
-import { linkRepository } from '@/lib/api'
+import { RepositoryResponse, linkRepository } from '@/lib/api'
 import { toast } from 'sonner'
 
 interface SearchInterfaceProps {
-  onResults: (results: any) => void
+  onResults: (results: RepositoryResponse) => void
   onLoading: (loading: boolean) => void
   onError: (error: string | null) => void
 }
@@ -28,8 +28,11 @@ export default function SearchInterface({ onResults, onLoading, onError }: Searc
       toast.success(`Successfully linked ${data.owner}/${data.name}!`)
       // Pass the repo data securely up to the UI layout
       onResults(data)
-    } catch (err: any) {
-      const errorMsg = err.response?.data?.detail || 'Failed to link repository'
+    } catch (err: unknown) {
+      const errorMsg =
+        err && typeof err === 'object' && 'response' in err
+          ? ((err as { response?: { data?: { detail?: string } } }).response?.data?.detail || 'Failed to link repository')
+          : 'Failed to link repository'
       onError(errorMsg)
       toast.error(errorMsg)
     } finally {
