@@ -13,7 +13,6 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
 lib64/
 parts/
 sdist/
@@ -35,7 +34,6 @@ wheels/
 .env.local
 
 # Project outputs
-*.json
 *.csv
 *.log
 .git_arch_sessions*
