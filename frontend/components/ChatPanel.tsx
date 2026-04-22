@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react'
 import { Send, User as UserIcon, Bot, Loader2, Sparkles } from 'lucide-react'
-import { ChatMessageItem, sendMessage, getChatHistory, createChatSession } from '@/lib/api'
+import { ChatMessageItem, sendMessage, getChatHistory, createChatSession, AuthUser } from '@/lib/api'
 import { toast } from 'sonner'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -12,9 +12,11 @@ interface ChatPanelProps {
   sessionId: string | null
   repositoryId?: string // used to contextulize if no session, but we create session on first send
   onNewSessionCreated?: (sessionId: string) => void
+  authUser: AuthUser | null
+  onLogin?: () => void
 }
 
-export default function ChatPanel({ sessionId, repositoryId, onNewSessionCreated }: ChatPanelProps) {
+export default function ChatPanel({ sessionId, repositoryId, onNewSessionCreated, authUser, onLogin }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessageItem[]>([])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -77,6 +79,12 @@ export default function ChatPanel({ sessionId, repositoryId, onNewSessionCreated
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    
+    if (!authUser) {
+      if (onLogin) onLogin()
+      return
+    }
+    
     if (!input.trim() || isLoading) return
 
     const userMessageContent = input.trim()
@@ -197,13 +205,13 @@ export default function ChatPanel({ sessionId, repositoryId, onNewSessionCreated
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            disabled={isLoading}
-            placeholder="Ask about the repository history..."
-            className="electric-ring flex-1 rounded-xl border border-[hsl(var(--border-soft))] bg-[hsl(var(--surface-0))] px-4 py-3 text-sm text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] transition-colors disabled:opacity-50"
+            disabled={(!authUser && isLoading) || (!!authUser && isLoading)}
+            placeholder={!authUser ? "Sign in to ask about the repository history..." : "Ask about the repository history..."}
+            className="electric-ring flex-1 rounded-xl border border-[hsl(var(--border-soft))] bg-[hsl(var(--surface-0))] px-4 py-3 text-sm text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           />
           <button
             type="submit"
-            disabled={!input.trim() || isLoading}
+            disabled={isLoading || (!!authUser && !input.trim())}
             className="glow-electric electric-ring flex h-auto w-12 shrink-0 items-center justify-center rounded-xl bg-[hsl(var(--primary))] text-[hsl(var(--surface-0))] transition-transform hover:-translate-y-[1px] disabled:opacity-50 disabled:hover:translate-y-0"
           >
             <Send className="h-5 w-5" />

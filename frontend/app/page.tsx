@@ -74,16 +74,23 @@ export default function Home() {
         onLogout={handleLogout}
       />
       
-      <section className="mx-auto flex w-full max-w-[1500px] flex-1 gap-0 overflow-hidden px-3 pb-4 pt-50 sm:px-5 sm:pt-50 lg:px-8">
+      <section className="relative mx-auto flex w-full max-w-[1500px] flex-1 gap-0 overflow-hidden px-3 pb-4 pt-4 sm:px-5 lg:px-8">
         {sidebarOpen && (
-          <aside className="fade-up hidden w-[320px] shrink-0 border-r border-[hsl(var(--border))] pr-4 lg:block h-full">
-            <ScanHistory
-              sessions={sessions}
-              activeSessionId={chatSessionId}
-              onSelectSession={handleSelectSession}
-              onNewChat={handleNewChat}
+          <>
+            {/* Mobile overlay backdrop */}
+            <div 
+              className="fixed inset-0 z-40 bg-black/50 lg:hidden"
+              onClick={() => setSidebarOpen(false)}
             />
-          </aside>
+            <aside className="fade-up fixed inset-y-0 left-0 z-50 w-[80%] max-w-[320px] bg-[hsl(var(--surface-1))] p-4 shadow-2xl border-r border-[hsl(var(--border))] h-full lg:relative lg:block lg:w-[320px] lg:shrink-0 lg:bg-transparent lg:p-0 lg:pr-4 lg:shadow-none lg:z-0">
+              <ScanHistory
+                sessions={sessions}
+                activeSessionId={chatSessionId}
+                onSelectSession={handleSelectSession}
+                onNewChat={handleNewChat}
+              />
+            </aside>
+          </>
         )}
 
         <div className="min-w-0 flex-1 pl-0 lg:pl-6 flex flex-col h-full gap-4">
@@ -92,6 +99,8 @@ export default function Home() {
               onResults={handleResults}
               onLoading={setLoading}
               onError={setError}
+              authUser={authUser}
+              onLogin={handleLogin}
             />
 
             {loading && (
@@ -135,6 +144,8 @@ export default function Home() {
               sessionId={chatSessionId} 
               repositoryId={results?.id}
               onNewSessionCreated={handleNewSessionCreated}
+              authUser={authUser}
+              onLogin={handleLogin}
             />
           </div>
         </div>

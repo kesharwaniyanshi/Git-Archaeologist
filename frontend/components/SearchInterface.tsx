@@ -2,21 +2,29 @@
 
 import { useState } from 'react'
 import { Database, Link, Loader2 } from 'lucide-react'
-import { RepositoryResponse, linkRepository } from '@/lib/api'
+import { RepositoryResponse, linkRepository, AuthUser } from '@/lib/api'
 import { toast } from 'sonner'
 
 interface SearchInterfaceProps {
   onResults: (results: RepositoryResponse) => void
   onLoading: (loading: boolean) => void
   onError: (error: string | null) => void
+  authUser: AuthUser | null
+  onLogin: () => void
 }
 
-export default function SearchInterface({ onResults, onLoading, onError }: SearchInterfaceProps) {
-  const [repoPath, setRepoPath] = useState('https://github.com/owner/repo')
+export default function SearchInterface({ onResults, onLoading, onError, authUser, onLogin }: SearchInterfaceProps) {
+  const [repoPath, setRepoPath] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+
+    if (!authUser) {
+      onLogin()
+      return
+    }
+
     if (!repoPath.trim()) return
 
     setIsSubmitting(true)
@@ -67,19 +75,20 @@ export default function SearchInterface({ onResults, onLoading, onError }: Searc
             type="text"
             value={repoPath}
             onChange={(e) => setRepoPath(e.target.value)}
-            className="electric-ring h-11 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--surface-0)/0.8)] px-3 text-sm text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))]"
+            disabled={!authUser}
+            className="electric-ring h-11 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--surface-0)/0.8)] px-3 text-sm text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] disabled:opacity-50 disabled:cursor-not-allowed"
             placeholder="https://github.com/isocpp/CppCoreGuidelines"
           />
         </div>
 
         <button
           type="submit"
-          disabled={isSubmitting}
+          disabled={isSubmitting || (!!authUser && !repoPath.trim())}
           className="glow-electric electric-ring w-full rounded-lg border border-[hsl(var(--primary)/0.5)] bg-[hsl(var(--primary))] px-4 py-3 text-sm font-semibold text-[hsl(var(--surface-0))] transition duration-200 hover:-translate-y-[1px] hover:bg-[hsl(var(--primary-glow))] disabled:opacity-50 disabled:hover:translate-y-0"
         >
           <span className="inline-flex items-center gap-2">
-            {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link className="h-4 w-4" />}
-            {isSubmitting ? 'Syncing...' : 'Link Repository'}
+            {!authUser ? <Link className="h-4 w-4" /> : isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link className="h-4 w-4" />}
+            {!authUser ? 'Sign in to link repository' : isSubmitting ? 'Syncing...' : 'Link Repository'}
           </span>
         </button>
       </form>
